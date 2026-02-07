@@ -1,4 +1,5 @@
 #include "BleProvisioningManager.h"
+#include <BLESecurity.h>  
 
 // --- BLE SERVER CALLBACKS ---
 class ServerCallbacks: public BLEServerCallbacks {
@@ -42,6 +43,13 @@ BleProvisioningManager::BleProvisioningManager() {
 
 void BleProvisioningManager::begin() {
     BLEDevice::init("ESP32-Solar-Prov"); // Name shown on Phone
+    BLESecurity *pSecurity = new BLESecurity();
+    
+    pSecurity->setCapability(ESP_IO_CAP_NONE); // No buttons/display, just connect
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    // ---------------------------
+
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new ServerCallbacks(this));
 

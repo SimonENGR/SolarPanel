@@ -19,16 +19,22 @@ volatile double currentElevation = 0;
 SolarPosition* sunPosition = nullptr;
 
 // --- 3.1.2 MODULE INSTANTIATION ---
-//const char* SSID = "BELL76724";       Now dynamically setup by app/phone
-//const char* PASSWORD = "20SA1#$6";    Now dynamically setup by app/phone
-
-// [NEW] PIN DEFINITIONS (Placeholders)
 #define PIN_LED 2
-#define PIN_CURRENT 34 
-#define PIN_IR_1 13
-#define PIN_IR_2 14
 
-MotorDriver motorSystem(PIN_LED); // [Ref 3.1.2] Constructor: LED on Pin 2
+// Cleaning Motor (IBT-2) - CONFIRMED & WORKING
+#define PIN_CLEAN_R 12   // RPWM (Signal Column)
+#define PIN_CLEAN_L 14   // LPWM (Signal Column)
+
+// Tilt Motor (Placeholder)
+#define PIN_TILT_UP 26   // Changed to safe generic GPIO
+#define PIN_TILT_DOWN 25 // Changed to safe generic GPIO
+
+// Sensors - FIXED CONFLICTS
+#define PIN_CURRENT 34   // CHANGED: Pin 10 causes crash. Pin 34 is Input-Only ADC.
+#define PIN_IR_1 13      // OK
+#define PIN_IR_2 27      // CHANGED: Pin 14 was conflicting with Motor LPWM.
+
+MotorDriver motorSystem(PIN_LED, PIN_CLEAN_R, PIN_CLEAN_L, PIN_TILT_UP, PIN_TILT_DOWN);// [Ref 3.1.2] Constructor: LED on Pin 2
 SolarWebServer webSystem(NULL, NULL); // [Ref 3.1.2] Constructor: WiFi credentials
 SensorInputManager sensorSystem(PIN_CURRENT, PIN_IR_1, PIN_IR_2);
 BleProvisioningManager bleManager;
@@ -97,38 +103,39 @@ void motorTaskCode(void * parameter) {
   while(true) {
     // READ SENSORS EVERY LOOP
     sensorSystem.update(); 
-    unsigned long now = millis();
-    if ( (sensorSystem.isCurrentBelowThreshold() || sensorSystem.areIRSensorsReflected()) 
-         && (now - lastCleaningTime > CLEANING_COOLDOWN) ) 
-    {
-        // TODO: Refine Trigger and Cleaning Logic
-        Serial.println("[AUTO] Triggering Maintenance...");
-        motorSystem.initiateCleaningCycle(); // This blocks for ~3 seconds
-        lastCleaningTime = millis();         // Reset timer
-    }
-
-    // Safety Check Example
-    if (!sensorSystem.isSafeToMove()) {
-         // Emergency Stop Logic could go here
-         // Serial.println("SAFETY STOP: Limit Hit or Overcurrent");
-    }
-
-    if (isManualOverride) {
-      motorSystem.signalManual();
-      // TODO: Add manual movement logic here
+// Auto-cleaning logic (Only if NOT in manual mode)
+    if (!isManualOverride) {
+        unsigned long now = millis();
+        if ( (sensorSystem.isCurrentBelowThreshold() || sensorSystem.areIRSensorsReflected()) 
+             && (now - lastCleaningTime > CLEANING_COOLDOWN) ) 
+        {
+            Serial.println("[AUTO] Triggering Maintenance...");
+            motorSystem.initiateCleaningCycle(); 
+            lastCleaningTime = millis();         
+        }
+        motorSystem.signalTracking(); 
     } else {
-      motorSystem.signalTracking(); // "Slow Pulse" confirms tracking has begun
-      // TODO: Add auto tracking movement logic here
+        motorSystem.signalManual();
+        // In Manual mode, we do nothing here. 
+        // The WebServer directly calls motorSystem.setCleaningMotor(...)
     }
-    // Note: Delay handles the blink timing inside the signal functions, 
-    // but we add a small yield here for safety if logic changes.
-    vTaskDelay(10 / portTICK_PERIOD_MS); 
+    
+    vTaskDelay(100 / portTICK_PERIOD_MS); 
   }
 }
 
 // --- PHASE 2: THE SETUP SEQUENCE ---
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
+  // 2. CRITICAL: Wait for USB to connect (Max 3 seconds)
+  // This ensures the Serial Monitor is ready before we print anything.
+  long startWait = millis();
+  while (!Serial && (millis() - startWait < 3000)) {
+     delay(10);
+  }
+  delay(1000); // Extra safety second
+
+  Serial.println(">>> SERIAL PORT CONNECTED SUCCESSFULLY <<<");
   motorSystem.begin();
   
   // ============================================================
