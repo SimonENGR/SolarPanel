@@ -1,11 +1,35 @@
 #include "MotorDriver.h"
 
-MotorDriver::MotorDriver(int ledPin, int cleanR, int cleanL, int tiltUp, int tiltDown) {
+// --- GLOBALS FOR ENCODER INTERRUPT ---
+// These must exist outside the class to work with attachInterrupt
+volatile long encoderPos = 0;
+int globalEncBPin = 0; // Used to pass the B pin number to the ISR
+
+// Interrupt Service Routine
+void IRAM_ATTR isr_updateEncoder() {
+    // Read the B pin to determine direction (Quadrature encoding)
+    if (digitalRead(globalEncBPin) == LOW) {
+        encoderPos++;
+    } else {
+        encoderPos--;
+    }
+}
+
+// --- CONSTRUCTOR ---
+MotorDriver::MotorDriver(int ledPin, int cleanR, int cleanL, int stepPin, int dirPin, int encA, int encB) {
     this->statusLedPin = ledPin;
+    
+    // Cleaning Motor Pins
     this->cleanRPin = cleanR;
     this->cleanLPin = cleanL;
-    this->tiltUpPin = tiltUp;
-    this->tiltDownPin = tiltDown;
+    
+    // Tilt Motor (Stepper) Pins
+    this->pinStep = stepPin;
+    this->pinDir = dirPin;
+    this->pinEncA = encA;
+    this->pinEncB = encB;
+    
+    this->tiltState = 0; // Default to stopped
 }
 
 void MotorDriver::begin() {
@@ -13,8 +37,7 @@ void MotorDriver::begin() {
     pinMode(statusLedPin, OUTPUT);
     digitalWrite(statusLedPin, LOW);
 
-    // 2. Setup Cleaning Motor (PWM for IBT-2)
-    // Using ledcSetup (Safe for Core v2.x and v3.x compat)
+    // 2. Setup Cleaning Motor (PWM for IBT-2) - PRESERVED EXACTLY
     ledcSetup(PWM_CH_R, PWM_FREQ, PWM_RES);
     ledcSetup(PWM_CH_L, PWM_FREQ, PWM_RES);
     
@@ -25,13 +48,41 @@ void MotorDriver::begin() {
     ledcWrite(PWM_CH_R, 0);
     ledcWrite(PWM_CH_L, 0);
 
-    // 3. Setup Tilt Motor (Digital Mode for now)
-    pinMode(tiltUpPin, OUTPUT);
-    pinMode(tiltDownPin, OUTPUT);
-    digitalWrite(tiltUpPin, LOW);
-    digitalWrite(tiltDownPin, LOW);
+    // 3. Setup Tilt Motor (Stepper + Encoder)
+    pinMode(pinStep, OUTPUT);
+    pinMode(pinDir, OUTPUT);
+    
+    // Encoder Pins (Input Pullup is safer for open-collector encoders)
+    pinMode(pinEncA, INPUT_PULLUP);
+    pinMode(pinEncB, INPUT_PULLUP);
+    
+    // Store the B pin in the global variable so the ISR can read it
+    globalEncBPin = pinEncB; 
+
+    // Attach Interrupt to Pin A
+    attachInterrupt(digitalPinToInterrupt(pinEncA), isr_updateEncoder, RISING);
+}
+int MotorDriver::getTiltState() {
+    return tiltState;
+}
+// --- MAIN LOOP UPDATE (New) ---
+// You must call motorSystem.update() in your main loop!
+void MotorDriver::update() {
+    if (tiltState != 0) {
+        // 1. Set Direction
+        digitalWrite(pinDir, (tiltState == 1) ? HIGH : LOW);
+
+        // 2. Step Fast (Adjust these numbers for speed)
+        // 400 microseconds = faster than before
+        // 200 microseconds = even faster
+        digitalWrite(pinStep, HIGH);
+        delayMicroseconds(800); 
+        digitalWrite(pinStep, LOW);
+        delayMicroseconds(800);
+    }
 }
 
+// --- VISUAL SIGNALS (Unchanged) ---
 void MotorDriver::signalWaiting() {
     for(int i=0; i<3; i++) {
         digitalWrite(statusLedPin, HIGH); delay(50);
@@ -49,47 +100,57 @@ void MotorDriver::signalManual() {
     digitalWrite(statusLedPin, LOW);  delay(100);
 }
 
+// --- CLEANING MOTOR LOGIC (Unchanged) ---
 void MotorDriver::setCleaningMotor(int direction, int speed) {
     if (direction == 1) { // Forward
         ledcWrite(PWM_CH_L, 0);
         ledcWrite(PWM_CH_R, speed);
-        Serial.println("[MOTOR] Cleaning: FWD");
+        // Serial.println("[MOTOR] Cleaning: FWD");
     } 
     else if (direction == -1) { // Reverse
         ledcWrite(PWM_CH_R, 0);
         ledcWrite(PWM_CH_L, speed);
-        Serial.println("[MOTOR] Cleaning: REV");
+        // Serial.println("[MOTOR] Cleaning: REV");
     } 
     else { // Stop
         ledcWrite(PWM_CH_R, 0);
         ledcWrite(PWM_CH_L, 0);
-        Serial.println("[MOTOR] Cleaning: STOP");
+        // Serial.println("[MOTOR] Cleaning: STOP");
     }
 }
 
+// --- TILT MOTOR LOGIC (Updated for Stepper) ---
 void MotorDriver::setTiltMotor(int direction) {
-    // Simple Digital Logic (Relay / H-Bridge style)
-    if (direction == 1) { // UP
-        digitalWrite(tiltDownPin, LOW);
-        digitalWrite(tiltUpPin, HIGH);
-        Serial.println("[MOTOR] Tilt: UP");
-    } 
-    else if (direction == -1) { // DOWN
-        digitalWrite(tiltUpPin, LOW);
-        digitalWrite(tiltDownPin, HIGH);
-        Serial.println("[MOTOR] Tilt: DOWN");
-    } 
-    else { // STOP
-        digitalWrite(tiltUpPin, LOW);
-        digitalWrite(tiltDownPin, LOW);
-        Serial.println("[MOTOR] Tilt: STOP");
-    }
+    // Instead of writing to relays, we simply set the state variable.
+    // The actual stepping happens in update().
+    
+    tiltState = direction; // 1, -1, or 0
+    
+    if (direction == 1)      Serial.println("[MOTOR] Tilt State: UP/FWD");
+    else if (direction == -1) Serial.println("[MOTOR] Tilt State: DOWN/REV");
+    else                      Serial.println("[MOTOR] Tilt State: STOP");
 }
 
 void MotorDriver::stopAll() {
     setCleaningMotor(0);
     setTiltMotor(0);
     Serial.println("[MOTOR] EMERGENCY STOP ALL");
+}
+
+// --- ENCODER FUNCTIONS (New) ---
+long MotorDriver::getEncoderPosition() {
+    long pos;
+    noInterrupts(); // Pause interrupts for atomic read
+    pos = encoderPos;
+    interrupts();
+    return pos;
+}
+
+void MotorDriver::resetEncoder() {
+    noInterrupts();
+    encoderPos = 0;
+    interrupts();
+    Serial.println("[MOTOR] Encoder Reset to 0");
 }
 
 void MotorDriver::initiateCleaningCycle() {

@@ -1,6 +1,7 @@
 #include "SolarWebServer.h"
 #include "MotorDriver.h" 
 
+// Allows the web server to access the global motor instance defined in main.cpp
 extern MotorDriver motorSystem;
 
 // Constructor
@@ -21,12 +22,22 @@ void SolarWebServer::begin() {
     setupRoutes();
     server.begin();
 }
+
 void SolarWebServer::setupRoutes() {
     
-    // --- STATUS ---
+    // --- STATUS ENDPOINT ---
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         StaticJsonDocument<200> doc;
-        doc["status"] = isManualOverride ? "MANUAL" : (isSystemInitialized ? "AUTO" : "WAITING");
+        
+        // Determine status string
+        if (isManualOverride) {
+            doc["status"] = "MANUAL";
+        } else if (isSystemInitialized) {
+            doc["status"] = "AUTO";
+        } else {
+            doc["status"] = "WAITING";
+        }
+        
         doc["override"] = isManualOverride;
         doc["azimuth"] = currentAzimuth;
         doc["elevation"] = currentElevation;
@@ -36,25 +47,33 @@ void SolarWebServer::setupRoutes() {
         request->send(200, "application/json", response);
     });
 
-    // --- MOTOR CONTROL (RESTORED) ---
+    // --- MOTOR CONTROL ENDPOINT ---
+    // Called by Android App: /motor?type=clean&dir=1
     server.on("/motor", HTTP_GET, [](AsyncWebServerRequest *request){
+        
         if (request->hasParam("type") && request->hasParam("dir")) {
             String type = request->getParam("type")->value();
             int dir = request->getParam("dir")->value().toInt();
 
-            // Force Manual Mode when App takes control
+            // CRITICAL: Force Manual Mode when App takes control
+            // This prevents the auto-tracker from fighting the user
             isManualOverride = true; 
 
             if (type == "clean") {
-                motorSystem.setCleaningMotor(dir, 255);
+                // Direction: 1 (Fwd), -1 (Rev), 0 (Stop)
+                motorSystem.setCleaningMotor(dir, 255); 
                 request->send(200, "text/plain", "Clean Motor OK");
-            } else if (type == "tilt") {
+            } 
+            else if (type == "tilt") {
+                // Direction: 1 (Up), -1 (Down), 0 (Stop)
                 motorSystem.setTiltMotor(dir);
                 request->send(200, "text/plain", "Tilt Motor OK");
-            } else if (type == "all" && dir == 0) {
+            } 
+            else if (type == "all" && dir == 0) {
                 motorSystem.stopAll();
                 request->send(200, "text/plain", "Emergency Stop");
-            } else {
+            } 
+            else {
                 request->send(400, "text/plain", "Unknown Type");
             }
         } else {
@@ -62,28 +81,38 @@ void SolarWebServer::setupRoutes() {
         }
     });
 
-    // --- MODE ---
+    // --- MODE CONTROL ---
     server.on("/mode", HTTP_GET, [](AsyncWebServerRequest *request){
         if (request->hasParam("manual")) {
             int val = request->getParam("manual")->value().toInt();
             isManualOverride = (val == 1);
-            if (!isManualOverride) motorSystem.stopAll(); // Safety stop when switching to Auto
+            
+            // Safety: Stop motors if switching back to Auto to prevent runaway
+            if (!isManualOverride) {
+                motorSystem.stopAll(); 
+            }
+            
             request->send(200, "text/plain", isManualOverride ? "Manual Mode" : "Auto Mode");
         } else {
             request->send(400, "text/plain", "Missing 'manual' param");
         }
     });
 
-    // --- UPDATE ---
+    // --- DATA UPDATE (GPS SYNC) ---
     AsyncCallbackJsonWebHandler *handler = new AsyncCallbackJsonWebHandler("/update", 
         [](AsyncWebServerRequest *request, JsonVariant &json) {
+            
             JsonObject jsonObj = json.as<JsonObject>();
+
             if (jsonObj.containsKey("lat") && jsonObj.containsKey("lon")) {
                 currentLat = jsonObj["lat"];
                 currentLon = jsonObj["lon"];
                 
+                // Re-initialize Solar Calculator
                 if (sunPosition) delete sunPosition;
                 sunPosition = new SolarPosition(currentLat, currentLon);
+
+                // Unlock System
                 isSystemInitialized = true; 
 
                 request->send(200, "application/json", "{\"message\":\"Sync Complete\"}");

@@ -7,10 +7,10 @@
 #include "SolarWebServer.h"// Network Logic
 #include "SensorInputManager.h" // Sensor Logic
 #include "BleProvisioningManager.h" // Enables Bluetooth Connection
+
 // --- 3.1.1 GLOBAL VARIABLE CREATION ---
-// Memory allocation for state flags
 volatile bool isWifiConnected = false;
-volatile bool isSystemInitialized = false; // [Ref 3.1.1] The Loop Protection Flag
+volatile bool isSystemInitialized = false; 
 volatile bool isManualOverride = false;
 volatile double currentLat = 0.0;
 volatile double currentLon = 0.0;
@@ -18,24 +18,37 @@ volatile double currentAzimuth = 0;
 volatile double currentElevation = 0; 
 SolarPosition* sunPosition = nullptr;
 
-// --- 3.1.2 MODULE INSTANTIATION ---
-#define PIN_LED 2
+// --- 3.1.2 PIN DEFINITIONS ---
 
-// Cleaning Motor (IBT-2) - CONFIRMED & WORKING
-#define PIN_CLEAN_R 12   // RPWM (Signal Column)
-#define PIN_CLEAN_L 14   // LPWM (Signal Column)
+// IMPORTANT: Moved LED to Pin 15 because Pin 2 is needed for the Encoder
+#define PIN_LED 15  
 
-// Tilt Motor (Placeholder)
-#define PIN_TILT_UP 26   // Changed to safe generic GPIO
-#define PIN_TILT_DOWN 25 // Changed to safe generic GPIO
+// Cleaning Motor (Keep 12/14 as requested)
+#define PIN_CLEAN_R 12   
+#define PIN_CLEAN_L 14   
 
-// Sensors - FIXED CONFLICTS
-#define PIN_CURRENT 34   // CHANGED: Pin 10 causes crash. Pin 34 is Input-Only ADC.
-#define PIN_IR_1 13      // OK
-#define PIN_IR_2 27      // CHANGED: Pin 14 was conflicting with Motor LPWM.
+// Tilt Motor (Stepper + Encoder) - New Pins
+#define PIN_TILT_STEP 23
+#define PIN_TILT_DIR  22
+#define PIN_ENC_A     2   // Was LED, now Encoder A
+#define PIN_ENC_B     4
 
-MotorDriver motorSystem(PIN_LED, PIN_CLEAN_R, PIN_CLEAN_L, PIN_TILT_UP, PIN_TILT_DOWN);// [Ref 3.1.2] Constructor: LED on Pin 2
-SolarWebServer webSystem(NULL, NULL); // [Ref 3.1.2] Constructor: WiFi credentials
+// Sensors
+#define PIN_CURRENT 34   
+#define PIN_IR_1 13      
+#define PIN_IR_2 27      
+
+// --- MODULE INSTANTIATION ---
+
+// Updated Constructor with all new pins
+MotorDriver motorSystem(
+    PIN_LED, 
+    PIN_CLEAN_R, PIN_CLEAN_L, 
+    PIN_TILT_STEP, PIN_TILT_DIR, 
+    PIN_ENC_A, PIN_ENC_B
+);
+
+SolarWebServer webSystem(NULL, NULL); 
 SensorInputManager sensorSystem(PIN_CURRENT, PIN_IR_1, PIN_IR_2);
 BleProvisioningManager bleManager;
 
@@ -44,67 +57,79 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);
 
 // Cleaning Timer
 unsigned long lastCleaningTime = 0;
-const unsigned long CLEANING_COOLDOWN = 60000; // 1 Minute cooldown between cleans
+const unsigned long CLEANING_COOLDOWN = 60000; 
 
 // --- RTOS TASK HANDLES ---
 TaskHandle_t NetworkTask;
 TaskHandle_t SolarTask;
 TaskHandle_t MotorTask;
 
-// --- TASK DEFINITIONS (PHASE 3: GATEKEEPER STATE) ---
+// --- TASK DEFINITIONS ---
 
-// [Ref 3.3.1] Network Task (Core 0)
-// Keeps NTP time synced independently of the other tasks.
+// Network Task
 void networkTaskCode(void * parameter) {
   timeClient.begin();
   while(true) {
-    if (isWifiConnected) { // Only update if WiFi is ready
+    if (isWifiConnected) { 
         timeClient.update(); 
     }
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
 }
 
-// [Ref 3.3.2] Solar Task (Core 1)
-// Calculates Sun Position (Business Logic)
+// Solar Task
 void solarTaskCode(void * parameter) {
-  
-  // [Ref 3.3.2] Gatekeeper Lock: BLOCKED
-  // Sits in this loop until isSystemInitialized becomes true.
   while (!isSystemInitialized) {
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
 
-  // [Ref 3.5.1] Normal Operation: UNLOCKED
   while(true) {
     if (sunPosition != nullptr) {
       time_t now = timeClient.getEpochTime();
       currentAzimuth = sunPosition->getSolarAzimuth(now);
       currentElevation = sunPosition->getSolarElevation(now);
-      Serial.printf("[SUN] Azimuth: %.2f | Elevation: %.2f\n", currentAzimuth, currentElevation);
+      // Serial.printf("[SUN] Azimuth: %.2f | Elevation: %.2f\n", currentAzimuth, currentElevation);
     }
     vTaskDelay(5000 / portTICK_PERIOD_MS);
   }
 }
 
-// [Ref 3.3.3] Motor Task (Core 1)
-// Visual Feedback & Motor Control (Hardware)
+// --- REPLACED MOTOR TASK CODE ---
 void motorTaskCode(void * parameter) {
   motorSystem.begin();
   sensorSystem.begin();
-  // [Ref 3.3.3] Gatekeeper Lock: VISUALLY ACTIVE
-  // Signals "Triple Blip" pattern to indicate WAITING state.
+
+  // Gatekeeper: Wait for System Init
   while (!isSystemInitialized) {
     motorSystem.signalWaiting(); 
     vTaskDelay(1000 / portTICK_PERIOD_MS); 
   }
 
-  // [Ref 3.5.2] Normal Operation: UNLOCKED
+  // Normal Operation
   while(true) {
-    // READ SENSORS EVERY LOOP
+    
+    // 1. Update Sensors
     sensorSystem.update(); 
-// Auto-cleaning logic (Only if NOT in manual mode)
-    if (!isManualOverride) {
+    
+    // 2. Check Motor State
+    if (isManualOverride) {
+        motorSystem.signalManual();
+        
+        // --- CRITICAL CHANGE FOR SMOOTHNESS ---
+        // If the tilt motor is active, we step immediately and SKIP the vTaskDelay.
+        // This creates a continuous, uninterrupted pulse stream.
+        if (motorSystem.getTiltState() != 0) {
+             motorSystem.update(); 
+             // We do NOT call vTaskDelay here. The loop repeats instantly.
+             // This effectively "hijacks" the task to focus 100% on the motor.
+        } 
+        else {
+             // If we are NOT moving, we wait to save CPU resources.
+             vTaskDelay(1 / portTICK_PERIOD_MS); 
+        }
+
+    } else {
+        // Auto Mode Logic (Keep existing)
         unsigned long now = millis();
         if ( (sensorSystem.isCurrentBelowThreshold() || sensorSystem.areIRSensorsReflected()) 
              && (now - lastCleaningTime > CLEANING_COOLDOWN) ) 
@@ -113,44 +138,32 @@ void motorTaskCode(void * parameter) {
             motorSystem.initiateCleaningCycle(); 
             lastCleaningTime = millis();         
         }
-        motorSystem.signalTracking(); 
-    } else {
-        motorSystem.signalManual();
-        // In Manual mode, we do nothing here. 
-        // The WebServer directly calls motorSystem.setCleaningMotor(...)
+        // In auto mode, we are mostly idle, so we keep the delay.
+        vTaskDelay(100 / portTICK_PERIOD_MS); 
     }
-    
-    vTaskDelay(100 / portTICK_PERIOD_MS); 
   }
 }
 
-// --- PHASE 2: THE SETUP SEQUENCE ---
+// --- SETUP & LOOP ---
 void setup() {
   Serial.begin(9600);
-  // 2. CRITICAL: Wait for USB to connect (Max 3 seconds)
-  // This ensures the Serial Monitor is ready before we print anything.
+  
   long startWait = millis();
   while (!Serial && (millis() - startWait < 3000)) {
      delay(10);
   }
-  delay(1000); // Extra safety second
+  delay(1000); 
 
   Serial.println(">>> SERIAL PORT CONNECTED SUCCESSFULLY <<<");
   motorSystem.begin();
   
-  // ============================================================
-  // PHASE 1: BLUETOOTH PROVISIONING LOOP
-  // ============================================================
+  // --- PHASE 1: BLE PROVISIONING ---
   Serial.println(">>> PHASE 1: ENTERING BLE PROVISIONING <<<");
   bleManager.begin();
   
-  // Block setup until WiFi is successfully connected
   while (!isWifiConnected) {
-    
-    // Visual Feedback: Slow Blink "Blue Waiting"
-    motorSystem.signalWaiting(); // Or create a new specific BLE pattern
+    motorSystem.signalWaiting(); 
 
-    // Check if Phone sent credentials
     if (bleManager.hasCredentials()) {
         String ssid = bleManager.getSSID();
         String pass = bleManager.getPassword();
@@ -159,10 +172,8 @@ void setup() {
         Serial.println(ssid);
         
         bleManager.sendStatus("CONNECTING...");
-        
         WiFi.begin(ssid.c_str(), pass.c_str());
         
-        // Wait up to 10 seconds for connection
         int retry = 0;
         while (WiFi.status() != WL_CONNECTED && retry < 20) {
             delay(500);
@@ -172,33 +183,23 @@ void setup() {
         
         if (WiFi.status() == WL_CONNECTED) {
             Serial.println("\nWiFi Success!");
-            
-            // Send the actual IP address back to the phone
             String ipAddress = WiFi.localIP().toString();
             bleManager.sendStatus("IP:" + ipAddress); 
-            // ---------------------
-            delay(2000); // Give phone time to read success
+            delay(2000); 
             isWifiConnected = true;
         } else {
             Serial.println("\nWiFi Failed. Waiting for new credentials...");
             bleManager.sendStatus("FAILED");
-            // Loop continues, user must re-enter pass in App
         }
     }
   }
 
-  // ============================================================
-  // PHASE 2: SYSTEM STARTUP
-  // ============================================================
+  // --- PHASE 2: SYSTEM STARTUP ---
   Serial.println(">>> PHASE 2: WIFI CONNECTED. STARTING SYSTEM. <<<");
   
-  // 1. Shutdown BLE to save memory/power
   bleManager.stop();
-
-  // 2. Start Web Server (Now that we have IP)
   webSystem.begin();
 
-  // 3. Launch RTOS Tasks (Gatekeeper Phase)
   xTaskCreatePinnedToCore(networkTaskCode, "NetTask", 4096, NULL, 1, &NetworkTask, 0);
   xTaskCreatePinnedToCore(solarTaskCode,   "SunTask", 4096, NULL, 1, &SolarTask, 1);
   xTaskCreatePinnedToCore(motorTaskCode,   "MotTask", 4096, NULL, 2, &MotorTask, 1);
