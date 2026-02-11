@@ -19,8 +19,13 @@ class MotorDriver {
 
         // State Tracking for Stepper
         // 0 = Idle, 1 = Moving Up, -1 = Moving Down
-        int tiltState; 
+        volatile int tiltState; // 0=Stop, 1=Fwd, -1=Rev
+        // Tuning for speed (microseconds)
+        const int STEP_DELAY = 800;
 
+    
+    // Tuning for speed (microseconds)
+    const int STEP_DELAY = 800;
         // PWM Settings
         const int PWM_FREQ = 5000;
         const int PWM_RES = 8;
@@ -37,7 +42,9 @@ class MotorDriver {
         // Main Loop: MUST be called repeatedly in void loop() or RTOS task
         // This handles the physical stepping logic
         void update();
-
+        void setTiltMotor(int direction);
+        void setCleaningMotor(int direction, int speed);
+        void stopAll();
         // Visual Signals
         void signalWaiting();
         void signalTracking();
@@ -49,7 +56,7 @@ class MotorDriver {
         
         // Direction: 1 = Up (Step Fwd), -1 = Down (Step Rev), 0 = Stop
         void setTiltMotor(int direction);
-        
+        void tick(); // Replaces "update()"
         void stopAll();
 
         // --- Encoder Logic ---
