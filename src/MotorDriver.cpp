@@ -119,22 +119,38 @@ void MotorDriver::setCleaningMotor(int direction, int speed) {
     }
 }
 
-// --- TILT MOTOR LOGIC (Updated for Stepper) ---
+// --- COMMAND FUNCTIONS (Called by WebServer or Auto-Logic) ---
 void MotorDriver::setTiltMotor(int direction) {
-    // Instead of writing to relays, we simply set the state variable.
-    // The actual stepping happens in update().
+    // We strictly update the STATE here. No physical movement code.
+    tiltState = direction; 
     
-    tiltState = direction; // 1, -1, or 0
-    
-    if (direction == 1)      Serial.println("[MOTOR] Tilt State: UP/FWD");
-    else if (direction == -1) Serial.println("[MOTOR] Tilt State: DOWN/REV");
-    else                      Serial.println("[MOTOR] Tilt State: STOP");
+    if (direction == 1) {
+        digitalWrite(pinDir, HIGH); // Set direction pin once
+        Serial.println("[MOTOR] Tilt State: UP");
+    }
+    else if (direction == -1) {
+        digitalWrite(pinDir, LOW);  // Set direction pin once
+        Serial.println("[MOTOR] Tilt State: DOWN");
+    }
+    else {
+        Serial.println("[MOTOR] Tilt State: STOP");
+    }
 }
 
 void MotorDriver::stopAll() {
-    setCleaningMotor(0);
+    setCleaningMotor(0,0);
     setTiltMotor(0);
     Serial.println("[MOTOR] EMERGENCY STOP ALL");
+}
+// --- ACTUATION LOOP (Called by void loop()) ---
+void MotorDriver::tick() {
+    // Only step if the state is active
+    if (tiltState != 0) {
+        digitalWrite(pinStep, HIGH);
+        delayMicroseconds(STEP_DELAY); 
+        digitalWrite(pinStep, LOW);
+        delayMicroseconds(STEP_DELAY);
+    }
 }
 
 // --- ENCODER FUNCTIONS (New) ---
@@ -156,12 +172,12 @@ void MotorDriver::resetEncoder() {
 void MotorDriver::initiateCleaningCycle() {
     // Automated demo cycle
     Serial.println(">>> CLEANING CYCLE STARTED <<<");
-    setCleaningMotor(1, 200); // Fwd Speed 200
+    //setCleaningMotor(1, 200); // Fwd Speed 200
     delay(2000);
-    setCleaningMotor(0);      // Stop
+    //setCleaningMotor(0);      // Stop
     delay(500);
-    setCleaningMotor(-1, 200); // Rev Speed 200
+    //setCleaningMotor(-1, 200); // Rev Speed 200
     delay(2000);
-    setCleaningMotor(0);       // Stop
+    //setCleaningMotor(0);       // Stop
     Serial.println(">>> CLEANING CYCLE COMPLETE <<<");
 }
