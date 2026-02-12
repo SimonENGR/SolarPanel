@@ -20,8 +20,8 @@ SolarPosition* sunPosition = nullptr;
 
 // --- PIN DEFINITIONS ---
 #define PIN_LED 15       // Permanent
-#define PIN_CLEAN_R 12   // Permanent
-#define PIN_CLEAN_L 14   // Permanent
+#define PIN_CLEAN_R 32   // Permanent
+#define PIN_CLEAN_L 33   // Permanent
 #define PIN_TILT_STEP 23 // Permanent
 #define PIN_TILT_DIR  22 // Permanent
 #define PIN_ENC_A     2  // Permanent

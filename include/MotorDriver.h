@@ -19,13 +19,11 @@ class MotorDriver {
 
         // State Tracking for Stepper
         // 0 = Idle, 1 = Moving Up, -1 = Moving Down
-        volatile int tiltState; // 0=Stop, 1=Fwd, -1=Rev
+        volatile int tiltState; 
+        
         // Tuning for speed (microseconds)
         const int STEP_DELAY = 800;
 
-    
-    // Tuning for speed (microseconds)
-    const int STEP_DELAY = 800;
         // PWM Settings
         const int PWM_FREQ = 5000;
         const int PWM_RES = 8;
@@ -33,31 +31,34 @@ class MotorDriver {
         const int PWM_CH_L = 1;
 
     public:
-        // Updated Constructor to include Stepper & Encoder Pins
+        // Constructor
         MotorDriver(int ledPin, int cleanR, int cleanL, int stepPin, int dirPin, int encA, int encB);        
         
         // Setup
         void begin();
 
-        // Main Loop: MUST be called repeatedly in void loop() or RTOS task
+        // Main Loop: MUST be called repeatedly in void loop()
         // This handles the physical stepping logic
-        void update();
-        void setTiltMotor(int direction);
-        void setCleaningMotor(int direction, int speed);
-        void stopAll();
-        // Visual Signals
-        void signalWaiting();
-        void signalTracking();
-        void signalManual();
-        int getTiltState();
+        void tick(); 
+        
+        // Helper function (Legacy support if needed, otherwise maps to tick)
+        void update(); 
+
         // --- Movement Logic ---
         // Direction: 1 = Forward, -1 = Backward, 0 = Stop
+        // Default speed is 255 if not specified
         void setCleaningMotor(int direction, int speed = 255);
         
         // Direction: 1 = Up (Step Fwd), -1 = Down (Step Rev), 0 = Stop
         void setTiltMotor(int direction);
-        void tick(); // Replaces "update()"
+        
         void stopAll();
+
+        // --- Visual Signals ---
+        void signalWaiting();
+        void signalTracking();
+        void signalManual();
+        int getTiltState();
 
         // --- Encoder Logic ---
         long getEncoderPosition();
