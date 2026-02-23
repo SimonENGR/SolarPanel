@@ -121,6 +121,31 @@ void motorTaskCode(void * parameter) {
   }
 }
 
+// --- HELPER: Attempt WiFi Connection ---
+bool attemptWifiConnection(String ssid, String password, int maxRetries = 20) {
+    Serial.print("Connecting to WiFi: "); 
+    Serial.println(ssid);
+    
+    WiFi.begin(ssid.c_str(), password.c_str());
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < maxRetries) {
+        delay(500); 
+        Serial.print("."); 
+        attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n✓ WiFi Connected!");
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+        return true;
+    } else {
+        Serial.println("\n✗ WiFi Connection Failed");
+        return false;
+    }
+}
+
 // --- SETUP ---
 void setup() {
   Serial.begin(9600);
@@ -129,50 +154,95 @@ void setup() {
   while (!Serial && (millis() - startWait < 3000)) { delay(10); }
   delay(1000); 
 
-  Serial.println(">>> SERIAL PORT CONNECTED SUCCESSFULLY <<<");
+  Serial.println("\n\n>>> ESP32 SOLAR TRACKER STARTING <<<");
   motorSystem.begin();
   
-  // PHASE 1: BLE PROVISIONING
-  Serial.println(">>> PHASE 1: ENTERING BLE PROVISIONING <<<");
-  bleManager.begin();
+  // ====================================================================
+  // SMART STARTUP LOGIC
+  // ====================================================================
   
-  while (!isWifiConnected) {
-    motorSystem.signalWaiting(); 
+  // STEP 1: Try to load saved WiFi credentials
+  bool hasSavedCredentials = bleManager.loadSavedCredentials();
+  
+  if (hasSavedCredentials) {
+      Serial.println("\n>>> ATTEMPTING AUTO-CONNECT WITH SAVED CREDENTIALS <<<");
+      
+      String savedSSID = bleManager.getSSID();
+      String savedPass = bleManager.getPassword();
+      
+      // Try to connect with saved credentials
+      isWifiConnected = attemptWifiConnection(savedSSID, savedPass, 20);
+      
+      if (isWifiConnected) {
+          // SUCCESS! WiFi connected automatically
+          Serial.println(">>> AUTO-CONNECT SUCCESS <<<");
+          
+          // Start BLE in "status broadcast" mode (tells phone we're online)
+          bleManager.beginStatusBroadcast();
+          bleManager.sendStatus("READY:" + WiFi.localIP().toString());
+          
+          // Short delay to let phone receive the status
+          delay(2000);
+          
+          // Stop BLE to save power (optional - can keep running for status updates)
+          bleManager.stop();
+          
+      } else {
+          // FAILED! Saved credentials are invalid (wrong password or network gone)
+          Serial.println(">>> AUTO-CONNECT FAILED - CLEARING OLD CREDENTIALS <<<");
+          bleManager.clearSavedCredentials();
+          hasSavedCredentials = false; // Fall through to provisioning
+      }
+  }
+  
+  // STEP 2: If no saved credentials OR auto-connect failed, enter provisioning mode
+  if (!isWifiConnected) {
+      Serial.println("\n>>> ENTERING BLE PROVISIONING MODE <<<");
+      bleManager.begin(); // Full provisioning mode
+      
+      // Wait for phone to send credentials
+      while (!isWifiConnected) {
+          motorSystem.signalWaiting(); // Blink LED to show waiting state
 
-    if (bleManager.hasCredentials()) {
-        String ssid = bleManager.getSSID();
-        String pass = bleManager.getPassword();
-        
-        Serial.print("Attempting WiFi Connection to: "); Serial.println(ssid);
-        bleManager.sendStatus("CONNECTING...");
-        
-        WiFi.begin(ssid.c_str(), pass.c_str());
-        
-        int retry = 0;
-        while (WiFi.status() != WL_CONNECTED && retry < 20) {
-            delay(500); Serial.print("."); retry++;
-        }
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("\nWiFi Success!");
-            bleManager.sendStatus("IP:" + WiFi.localIP().toString()); 
-            delay(2000); 
-            isWifiConnected = true;
-        } else {
-            Serial.println("\nWiFi Failed.");
-            bleManager.sendStatus("FAILED");
-        }
-    }
+          if (bleManager.hasCredentials()) {
+              String ssid = bleManager.getSSID();
+              String pass = bleManager.getPassword();
+              
+              Serial.println("\n>>> CREDENTIALS RECEIVED VIA BLE <<<");
+              bleManager.sendStatus("CONNECTING...");
+              
+              // Attempt connection
+              isWifiConnected = attemptWifiConnection(ssid, pass, 20);
+              
+              if (isWifiConnected) {
+                  // Notify phone of success
+                  bleManager.sendStatus("IP:" + WiFi.localIP().toString());
+                  delay(4000); // Give phone time to receive
+                  bleManager.stop(); // Stop BLE, switch to WiFi
+              } else {
+                  // Notify phone of failure
+                  bleManager.sendStatus("FAILED");
+                  bleManager.clearSavedCredentials(); // Clear bad credentials
+              }
+          }
+          
+          delay(100); // Small delay in provisioning loop
+      }
   }
 
-  // PHASE 2: SYSTEM STARTUP
-  Serial.println(">>> PHASE 2: SYSTEM STARTUP <<<");
-  bleManager.stop();
+  // ====================================================================
+  // PHASE 2: SYSTEM STARTUP (After WiFi is connected)
+  // ====================================================================
+  Serial.println("\n>>> PHASE 2: SYSTEM STARTUP <<<");
+  
   webSystem.begin();
 
+  // Start FreeRTOS Tasks
   xTaskCreatePinnedToCore(networkTaskCode, "NetTask", 4096, NULL, 1, &NetworkTask, 0);
   xTaskCreatePinnedToCore(solarTaskCode,   "SunTask", 4096, NULL, 1, &SolarTask, 1);
   xTaskCreatePinnedToCore(motorTaskCode,   "MotTask", 4096, NULL, 2, &MotorTask, 1);
+  
+  Serial.println(">>> SYSTEM READY <<<\n");
 }
 
 // --- MAIN LOOP ---
@@ -180,4 +250,16 @@ void loop() {
     // This runs as fast as the CPU allows (~200kHz+)
     // giving us a smooth stepper pulse train
     motorSystem.tick();
+    // Add this debug command
+    if (Serial.available()) {
+        char cmd = Serial.read();
+        
+        if (cmd == 'r' || cmd == 'R') {
+            Serial.println("\n>>> CLEARING WIFI CREDENTIALS <<<");
+            bleManager.clearSavedCredentials();
+            Serial.println(">>> RESTARTING ESP32 <<<");
+            delay(1000);
+            ESP.restart();
+        }
+    }
 }

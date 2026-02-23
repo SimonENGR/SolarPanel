@@ -16,6 +16,8 @@ void SolarWebServer::begin() {
     // 2. Start mDNS
     if (MDNS.begin("esp32-solar")) {
         Serial.println("mDNS responder started");
+        // Add service for discovery
+        MDNS.addService("http", "tcp", 80);
     }
 
     // 3. Setup Routes & Start
@@ -25,6 +27,19 @@ void SolarWebServer::begin() {
 
 void SolarWebServer::setupRoutes() {
     
+    // --- DISCOVERY ENDPOINT (NEW!) ---
+    // This allows the phone to check if ESP32 is ready without BLE
+    server.on("/discover", HTTP_GET, [](AsyncWebServerRequest *request){
+        // Enable CORS for any origin
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", 
+            "{\"status\":\"ready\",\"device\":\"ESP32-Solar-Online\",\"ip\":\"" + WiFi.localIP().toString() + "\"}");
+        
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(response);
+        
+        Serial.println("[WEB] Discovery request received from: " + request->client()->remoteIP().toString());
+    });
+
     // --- STATUS ENDPOINT ---
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         StaticJsonDocument<200> doc;
