@@ -4,68 +4,69 @@
 #include <Arduino.h>
 
 class MotorDriver {
-    private:
-        int statusLedPin;
+private:
+  // --- Cleaning Motor (IBT-2 PWM) ---
+  int cleanRPin;
+  int cleanLPin;
 
-        // --- Cleaning Motor (IBT-2 PWM) ---
-        int cleanRPin;
-        int cleanLPin;
+  // --- Tilt Motor (Stepper + Encoder) ---
+  int pinEna;
+  int pinStep;
+  int pinDir;
+  int pinEncA;
+  int pinEncB;
 
-        // --- Tilt Motor (Stepper + Encoder) ---
-        int pinStep;
-        int pinDir;
-        int pinEncA;
-        int pinEncB;
+  // --- Limit Switch ---
+  int pinLimitSwitch;
+  bool limitTriggered;
 
-        // State Tracking for Stepper
-        // 0 = Idle, 1 = Moving Up, -1 = Moving Down
-        volatile int tiltState; 
-        
-        // Tuning for speed (microseconds)
-        const int STEP_DELAY = 800;
+  // State Tracking for Stepper
+  // 0 = Idle, 1 = Moving Up, -1 = Moving Down
+  volatile int tiltState;
 
-        // PWM Settings
-        const int PWM_FREQ = 5000;
-        const int PWM_RES = 8;
-        const int PWM_CH_R = 0;
-        const int PWM_CH_L = 1;
+  // Tuning for speed (microseconds)
+  const int STEP_DELAY = 800;
 
-    public:
-        // Constructor
-        MotorDriver(int ledPin, int cleanR, int cleanL, int stepPin, int dirPin, int encA, int encB);        
-        
-        // Setup
-        void begin();
+  // Encoder Resolution
+  static const int ENCODER_PPR = 3600; // PKT5809: 3600 pulses per revolution
+  static constexpr float GEAR_RATIO = 10.0f; // 1:10 worm gear (motor:panel)
 
-        // Main Loop: MUST be called repeatedly in void loop()
-        // This handles the physical stepping logic
-        void tick(); 
-        
-        // Helper function (Legacy support if needed, otherwise maps to tick)
-        void update(); 
+  // PWM Settings
+  const int PWM_FREQ = 5000;
+  const int PWM_RES = 8;
+  const int PWM_CH_R = 0;
+  const int PWM_CH_L = 1;
 
-        // --- Movement Logic ---
-        // Direction: 1 = Forward, -1 = Backward, 0 = Stop
-        // Default speed is 255 if not specified
-        void setCleaningMotor(int direction, int speed = 255);
-        
-        // Direction: 1 = Up (Step Fwd), -1 = Down (Step Rev), 0 = Stop
-        void setTiltMotor(int direction);
-        
-        void stopAll();
+public:
+  // Constructor
+  MotorDriver(int cleanR, int cleanL, int enaPin, int stepPin, int dirPin,
+              int encA, int encB, int limitPin);
 
-        // --- Visual Signals ---
-        void signalWaiting();
-        void signalTracking();
-        void signalManual();
-        int getTiltState();
+  // Setup
+  void begin();
 
-        // --- Encoder Logic ---
-        long getEncoderPosition();
-        void resetEncoder();
+  // Main Loop: MUST be called repeatedly in void loop()
+  void tick();
 
-        // Legacy Automated Cycle
-        void initiateCleaningCycle();
+  // Helper function (Legacy support)
+  void update();
+
+  // --- Movement Logic ---
+  void setCleaningMotor(int direction, int speed = 255);
+  void setTiltMotor(int direction);
+  void stopAll();
+  int getTiltState();
+
+  // --- Encoder Logic ---
+  long getEncoderPosition();
+  void resetEncoder();
+  float getAngleDegrees();
+
+  // --- Limit Switch ---
+  bool isLimitTriggered();
+
+  // Legacy Automated Cycle
+  void initiateCleaningCycle();
 };
 
 #endif
