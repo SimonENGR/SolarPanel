@@ -1,31 +1,11 @@
 #include "MotorDriver.h"
+#include "driver/pcnt.h"
 
-// --- GLOBALS FOR ENCODER INTERRUPT ---
-volatile long encoderPos = 0;
-int globalEncAPin = 0;
-int globalEncBPin = 0;
-volatile int *globalTiltState = nullptr;
-volatile unsigned long lastEdgeTime = 0; // For debounce
-
-// Single ISR on RISING of pin A, read B for direction (1x mode)
-// Motor-gated + time-debounced to reject step pulse EMI
-void IRAM_ATTR isr_encoderA() {
-  if (globalTiltState == nullptr || *globalTiltState == 0)
-    return;
-
-  // Debounce: reject edges within 1ms of last valid edge (step EMI filter)
-  unsigned long now = micros();
-  if (now - lastEdgeTime < 1000)
-    return;
-  lastEdgeTime = now;
-
-  // On RISING of A: B LOW = forward, B HIGH = backward
-  if (digitalRead(globalEncBPin) == LOW) {
-    encoderPos++;
-  } else {
-    encoderPos--;
-  }
-}
+// --- HARDWARE PULSE COUNTER (PCNT) ---
+// Uses ESP32 dedicated PCNT peripheral for reliable encoder counting.
+// 1x mode: counts RISING edges on channel A, B determines direction.
+// Hardware glitch filter rejects EMI — no software debounce needed.
+#define ENCODER_PCNT_UNIT PCNT_UNIT_0
 
 // --- CONSTRUCTOR ---
 MotorDriver::MotorDriver(int cleanR, int cleanL, int enaPin, int stepPin,
@@ -63,18 +43,48 @@ void MotorDriver::begin() {
   pinMode(pinStep, OUTPUT);
   pinMode(pinDir, OUTPUT);
 
-  // Encoder Pins (pullup prevents noise when disconnected)
+  // Encoder: ESP32 hardware pulse counter (PCNT)
+  // Pull-ups for signal integrity when encoder disconnected
   pinMode(pinEncA, INPUT_PULLUP);
   pinMode(pinEncB, INPUT_PULLUP);
 
-  // Store pin numbers for ISR
-  globalEncAPin = pinEncA;
-  globalEncBPin = pinEncB;
-  globalTiltState = &tiltState;
+  // Channel 0: Count on A, Control on B
+  pcnt_config_t pcnt_config_a = {};
+  pcnt_config_a.pulse_gpio_num = pinEncA;
+  pcnt_config_a.ctrl_gpio_num = pinEncB;
+  pcnt_config_a.unit = ENCODER_PCNT_UNIT;
+  pcnt_config_a.channel = PCNT_CHANNEL_0;
+  pcnt_config_a.pos_mode = PCNT_COUNT_DEC;
+  pcnt_config_a.neg_mode = PCNT_COUNT_INC;
+  pcnt_config_a.lctrl_mode = PCNT_MODE_REVERSE;
+  pcnt_config_a.hctrl_mode = PCNT_MODE_KEEP;
+  pcnt_config_a.counter_h_lim = 32767;
+  pcnt_config_a.counter_l_lim = -32768;
+  pcnt_unit_config(&pcnt_config_a);
 
-  // 1x mode: single interrupt on RISING of pin A, read B for direction
-  attachInterrupt(digitalPinToInterrupt(pinEncA), isr_encoderA, RISING);
-  Serial.println("[ENCODER] 1x decoding active (3600 CPR, motor-gated)");
+  // Channel 1: Count on B, Control on A
+  pcnt_config_t pcnt_config_b = {};
+  pcnt_config_b.pulse_gpio_num = pinEncB;
+  pcnt_config_b.ctrl_gpio_num = pinEncA;
+  pcnt_config_b.unit = ENCODER_PCNT_UNIT;
+  pcnt_config_b.channel = PCNT_CHANNEL_1;
+  pcnt_config_b.pos_mode = PCNT_COUNT_INC;
+  pcnt_config_b.neg_mode = PCNT_COUNT_DEC;
+  pcnt_config_b.lctrl_mode = PCNT_MODE_REVERSE;
+  pcnt_config_b.hctrl_mode = PCNT_MODE_KEEP;
+  pcnt_config_b.counter_h_lim = 32767;
+  pcnt_config_b.counter_l_lim = -32768;
+  pcnt_unit_config(&pcnt_config_b);
+
+  // Hardware glitch filter: 25 APB cycles = 312ns at 80 MHz
+  pcnt_set_filter_value(ENCODER_PCNT_UNIT, 25);
+  pcnt_filter_enable(ENCODER_PCNT_UNIT);
+
+  pcnt_counter_pause(ENCODER_PCNT_UNIT);
+  pcnt_counter_clear(ENCODER_PCNT_UNIT);
+  pcnt_counter_resume(ENCODER_PCNT_UNIT);
+  Serial.println(
+      "[ENCODER] Hardware PCNT 4x Quadrature active (14400 CPR, 312ns filter)");
 
   // 3. Setup Limit Switch
   pinMode(pinLimitSwitch, INPUT_PULLUP);
@@ -86,18 +96,6 @@ void MotorDriver::begin() {
 
 int MotorDriver::getTiltState() { return tiltState; }
 
-// --- MAIN LOOP UPDATE (Legacy) ---
-void MotorDriver::update() {
-  if (tiltState != 0) {
-    digitalWrite(pinDir, (tiltState == 1) ? HIGH : LOW);
-    digitalWrite(pinStep, HIGH);
-    delayMicroseconds(800);
-    digitalWrite(pinStep, LOW);
-    delayMicroseconds(800);
-  }
-}
-
-// --- CLEANING MOTOR ---
 void MotorDriver::setCleaningMotor(int direction, int speed) {
   if (direction == 1) {
     ledcWrite(PWM_CH_L, 0);
@@ -143,14 +141,14 @@ void MotorDriver::moveToAngle(float degrees) {
   // Convert panel degrees to encoder counts
   // panel_angle = (counts * 360) / (CPR * GEAR_RATIO)
   // counts = panel_angle * CPR * GEAR_RATIO / 360
-  targetPos = (long)(degrees * ENCODER_CPR * GEAR_RATIO / 360.0f);
+  targetPos = (long)(degrees * (ENCODER_CPR * 4) * GEAR_RATIO / 360.0f);
   isPositioning = true;
 
   long currentPos = getEncoderPosition();
   int dir = (targetPos > currentPos) ? 1 : -1;
 
   digitalWrite(pinEna, LOW); // Enable driver
-  digitalWrite(pinDir, (dir == 1) ? HIGH : LOW);
+  digitalWrite(pinDir, (dir == 1) ? LOW : HIGH);
   tiltState = dir;
 
   Serial.printf("[POSITION] Moving to %.2f° (target pos: %ld, current: %ld)\n",
@@ -168,6 +166,9 @@ bool MotorDriver::isMoving() { return isPositioning; }
 
 // --- ACTUATION LOOP (Called by void loop()) ---
 void MotorDriver::tick() {
+  // 0. Poll PCNT to accumulate 16-bit hardware diffs into 32-bit software
+  getEncoderPosition();
+
   // 1. Check limit switch with debouncing (5 consecutive LOW reads = triggered)
   if (digitalRead(pinLimitSwitch) == LOW) {
     limitDebounce++;
@@ -189,7 +190,7 @@ void MotorDriver::tick() {
     long currentPos = getEncoderPosition();
     long error = targetPos - currentPos;
 
-    if (abs(error) <= 2) {
+    if (abs(error) <= 40) {
       // Close enough — stop
       tiltState = 0;
       isPositioning = false;
@@ -203,7 +204,7 @@ void MotorDriver::tick() {
     int dir = (error > 0) ? 1 : -1;
     if (tiltState != dir) {
       tiltState = dir;
-      digitalWrite(pinDir, (dir == 1) ? HIGH : LOW);
+      digitalWrite(pinDir, (dir == 1) ? LOW : HIGH);
     }
   }
 
@@ -216,26 +217,60 @@ void MotorDriver::tick() {
   }
 }
 
-// --- ENCODER FUNCTIONS ---
+// --- ENCODER FUNCTIONS (Hardware PCNT) ---
+double cheated_pcnt_accum = 0.0;
+int16_t last_pcnt = 0;
+portMUX_TYPE encoder_mux = portMUX_INITIALIZER_UNLOCKED;
+
 long MotorDriver::getEncoderPosition() {
-  long pos;
-  noInterrupts();
-  pos = encoderPos;
-  interrupts();
-  return pos;
+  int16_t count;
+  pcnt_get_counter_value(ENCODER_PCNT_UNIT, &count);
+
+  portENTER_CRITICAL_ISR(&encoder_mux);
+  // Handle 16-bit hardware overflow
+  int16_t diff = count - last_pcnt;
+  if (diff > 16383)
+    diff -= 32768;
+  else if (diff < -16384)
+    diff += 32768;
+
+  // The actual hardware wiring counts backwards, so we invert the diff FIRST
+  double true_diff = (double)(-diff);
+
+  // Apply Asymmetric Mathematical "Cheat" for mechanical backlash
+  if (true_diff > 0) {
+    // UP Correction: 86 raw degrees == 90 visual degrees
+    true_diff *= (90.0 / 86.0);
+  } else if (true_diff < 0) {
+    // DOWN Correction: 64 raw degrees == 90 visual degrees
+    // (64 raw degrees of motor movement drops the panel 90 degrees)
+    true_diff *= (90.0 / 64.0);
+  }
+
+  cheated_pcnt_accum += true_diff;
+  last_pcnt = count;
+  long current_pos = (long)cheated_pcnt_accum;
+  portEXIT_CRITICAL_ISR(&encoder_mux);
+
+  return current_pos;
 }
 
 void MotorDriver::resetEncoder() {
-  noInterrupts();
-  encoderPos = 0;
-  interrupts();
+  portENTER_CRITICAL_ISR(&encoder_mux);
+  pcnt_counter_pause(ENCODER_PCNT_UNIT);
+  pcnt_counter_clear(ENCODER_PCNT_UNIT);
+  cheated_pcnt_accum = 0.0;
+  last_pcnt = 0;
+  pcnt_counter_resume(ENCODER_PCNT_UNIT);
+  portEXIT_CRITICAL_ISR(&encoder_mux);
+
   Serial.println("[ENCODER] Reset to 0°");
 }
 
 float MotorDriver::getAngleDegrees() {
   long pos = getEncoderPosition();
-  // Quadrature: 14400 CPR, 1:10 gear
-  return (pos * 360.0f) / (ENCODER_CPR * GEAR_RATIO);
+  // 4x Quadrature mode: 14400 CPR, 1:10 gear
+  return (pos * 360.0f) / ((ENCODER_CPR * 4) * GEAR_RATIO);
 }
 
 bool MotorDriver::isLimitTriggered() { return limitTriggered; }

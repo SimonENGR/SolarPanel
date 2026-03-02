@@ -30,7 +30,7 @@ private:
   volatile bool isPositioning; // True when executing a precision move
 
   // Tuning for speed (microseconds)
-  const int STEP_DELAY = 800;
+  const int STEP_DELAY = 2500;
 
   // Encoder Resolution (1x mode: RISING on A only)
   static const int ENCODER_PPR = 3600;
