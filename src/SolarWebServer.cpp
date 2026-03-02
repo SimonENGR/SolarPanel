@@ -69,8 +69,6 @@ void SolarWebServer::setupRoutes() {
   });
 
   // --- ENCODER ENDPOINT ---
-  // /encoder              → returns current angle & position
-  // /encoder?action=reset → resets encoder to 0°
   server.on("/encoder", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (request->hasParam("action")) {
       String action = request->getParam("action")->value();
@@ -85,8 +83,52 @@ void SolarWebServer::setupRoutes() {
     StaticJsonDocument<128> doc;
     doc["angle"] = motorSystem.getAngleDegrees();
     doc["position"] = motorSystem.getEncoderPosition();
-    doc["ppr"] = 3600;
+    doc["cpr"] = 14400;
 
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+
+  // --- ANGLE CONTROL ENDPOINT ---
+  // /angle?target=5.3   → move to 5.3°
+  // /angle?delta=0.1    → nudge by +0.1°
+  // /angle?delta=-1.0   → nudge by -1.0°
+  // /angle              → returns current angle + moving status
+  server.on("/angle", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("target")) {
+      float target = request->getParam("target")->value().toFloat();
+      motorSystem.moveToAngle(target);
+
+      StaticJsonDocument<128> doc;
+      doc["message"] = "Moving to target";
+      doc["target"] = target;
+      doc["current"] = motorSystem.getAngleDegrees();
+      String response;
+      serializeJson(doc, response);
+      request->send(200, "application/json", response);
+      return;
+    }
+
+    if (request->hasParam("delta")) {
+      float delta = request->getParam("delta")->value().toFloat();
+      motorSystem.moveByAngle(delta);
+
+      StaticJsonDocument<128> doc;
+      doc["message"] = "Nudging";
+      doc["delta"] = delta;
+      doc["current"] = motorSystem.getAngleDegrees();
+      String response;
+      serializeJson(doc, response);
+      request->send(200, "application/json", response);
+      return;
+    }
+
+    // No params = status query
+    StaticJsonDocument<128> doc;
+    doc["angle"] = motorSystem.getAngleDegrees();
+    doc["position"] = motorSystem.getEncoderPosition();
+    doc["moving"] = motorSystem.isMoving();
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);

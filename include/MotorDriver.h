@@ -19,17 +19,23 @@ private:
   // --- Limit Switch ---
   int pinLimitSwitch;
   bool limitTriggered;
+  int limitDebounce;
 
   // State Tracking for Stepper
   // 0 = Idle, 1 = Moving Up, -1 = Moving Down
   volatile int tiltState;
 
+  // --- Precision Positioning ---
+  volatile long targetPos;     // Target encoder position for moveToAngle
+  volatile bool isPositioning; // True when executing a precision move
+
   // Tuning for speed (microseconds)
   const int STEP_DELAY = 800;
 
-  // Encoder Resolution
-  static const int ENCODER_PPR = 3600; // PKT5809: 3600 pulses per revolution
-  static constexpr float GEAR_RATIO = 10.0f; // 1:10 worm gear (motor:panel)
+  // Encoder Resolution (1x mode: RISING on A only)
+  static const int ENCODER_PPR = 3600;
+  static const int ENCODER_CPR = ENCODER_PPR; // 3600 counts/rev in 1x mode
+  static constexpr float GEAR_RATIO = 10.0f;  // 1:10 worm gear (motor:panel)
 
   // PWM Settings
   const int PWM_FREQ = 5000;
@@ -56,6 +62,11 @@ public:
   void setTiltMotor(int direction);
   void stopAll();
   int getTiltState();
+
+  // --- Precision Positioning ---
+  void moveToAngle(float degrees);  // Absolute: go to this angle
+  void moveByAngle(float deltaDeg); // Relative: move by ±degrees
+  bool isMoving();                  // True if precision move in progress
 
   // --- Encoder Logic ---
   long getEncoderPosition();
