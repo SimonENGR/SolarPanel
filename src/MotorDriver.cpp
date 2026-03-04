@@ -125,12 +125,15 @@ void MotorDriver::setTiltMotor(int direction) {
     Serial.println("[MOTOR] Tilt: DOWN (manual)");
   } else {
     digitalWrite(pinEna, HIGH);
+    tiltState = 0; // IMPORTANT: clear tiltState when setting to 0 so tick()
+                   // stops pulsing
     Serial.printf("[MOTOR] Tilt: STOP at %.2f°\n", getAngleDegrees());
   }
 }
 
 void MotorDriver::stopAll() {
   isPositioning = false;
+  tiltState = 0; // IMPORTANT: clear tiltState
   setCleaningMotor(0, 0);
   setTiltMotor(0);
   Serial.println("[MOTOR] EMERGENCY STOP ALL");
@@ -190,7 +193,7 @@ void MotorDriver::tick() {
     long currentPos = getEncoderPosition();
     long error = targetPos - currentPos;
 
-    if (abs(error) <= 40) {
+    if (abs(error) <= 5) {
       // Close enough — stop
       tiltState = 0;
       isPositioning = false;

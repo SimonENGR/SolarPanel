@@ -15,6 +15,7 @@
 volatile bool isWifiConnected = false;
 volatile bool isSystemInitialized = false;
 volatile bool isManualOverride = false;
+volatile bool forceTrackingUpdate = false;
 volatile double currentLat = 0.0;
 volatile double currentLon = 0.0;
 volatile double currentAzimuth = 0;
@@ -98,6 +99,9 @@ void motorTaskCode(void *parameter) {
     if (isManualOverride) {
       // In Manual Mode, we do nothing here.
       // The WebServer sets the state, the void loop() drives the motor.
+      vTaskDelay(
+          100 /
+          portTICK_PERIOD_MS); // CRITICAL: Yield CPU to prevent starving loop()
     } else {
       // Auto Mode Logic
       unsigned long now = millis();
@@ -109,12 +113,43 @@ void motorTaskCode(void *parameter) {
         lastCleaningTime = millis();
       }
 
-      // FUTURE: Auto-Tracking logic would go here
-      // Example: if (elevation > x) motorSystem.setTiltMotor(1);
-    }
+      // Auto-Tracking Logic
+      if (sunPosition != nullptr) {
+        // Only move occasionally to save power and prevent jitter (e.g. 1x per
+        // 10 minutes)
+        static unsigned long lastMoveTime = 0;
+        if (forceTrackingUpdate || now - lastMoveTime > 600000 ||
+            lastMoveTime == 0) {
+          forceTrackingUpdate = false;
 
-    // Run this task at a moderate speed (10Hz is plenty for decision making)
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+          float targetAngle = 0.0;
+          if (currentElevation > 0.0) {
+            // Daytime: target sun elevation
+            targetAngle = (float)currentElevation;
+            if (targetAngle > 85.0f)
+              targetAngle = 85.0f; // Soft cap near horizontal
+          } else {
+            // Nighttime: return to vertical bounds (0 degrees)
+            targetAngle = 0.0f;
+          }
+
+          // Fetch current tilt to apply deadband
+          float currentAngle = motorSystem.getAngleDegrees();
+
+          // Deadband: Only move if difference is > 2.0 degrees
+          if (abs(currentAngle - targetAngle) > 2.0f) {
+            Serial.printf(
+                "[AUTO] Adjusting panel constraint: %.1f° -> target: %.1f°\n",
+                currentAngle, targetAngle);
+            motorSystem.moveToAngle(targetAngle);
+            lastMoveTime = now;
+          }
+        }
+      }
+
+      // Run this task at a moderate speed (10Hz is plenty for decision making)
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
   }
 }
 
@@ -200,15 +235,16 @@ void setup() {
       Serial.println("[BLE] Bluetooth staying active for app communication");
 
     } else {
-      // FAILED! Saved credentials are invalid (wrong password or network gone)
+      // FAILED! Saved credentials are invalid (wrong password or network
+      // gone)
       Serial.println(">>> AUTO-CONNECT FAILED - CLEARING OLD CREDENTIALS <<<");
       bleManager.clearSavedCredentials();
       hasSavedCredentials = false; // Fall through to provisioning
     }
   }
 
-  // STEP 2: If no saved credentials OR auto-connect failed, enter provisioning
-  // mode
+  // STEP 2: If no saved credentials OR auto-connect failed, enter
+  // provisioning mode
   if (!isWifiConnected) {
     Serial.println("\n>>> ENTERING BLE PROVISIONING MODE <<<");
     bleManager.begin(); // Full provisioning mode

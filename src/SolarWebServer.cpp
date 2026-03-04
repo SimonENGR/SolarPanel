@@ -96,6 +96,9 @@ void SolarWebServer::setupRoutes() {
   // /angle?delta=-1.0   → nudge by -1.0°
   // /angle              → returns current angle + moving status
   server.on("/angle", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // CRITICAL: Force Manual Mode when App explicitly commands a new angle
+    isManualOverride = true;
+
     if (request->hasParam("target")) {
       float target = request->getParam("target")->value().toFloat();
       motorSystem.moveToAngle(target);
@@ -175,9 +178,11 @@ void SolarWebServer::setupRoutes() {
       int val = request->getParam("manual")->value().toInt();
       isManualOverride = (val == 1);
 
-      // Safety: Stop motors if switching back to Auto to prevent runaway
+      // Safety: Stop motors when switching modes to prevent runaway
+      motorSystem.stopAll();
+
       if (!isManualOverride) {
-        motorSystem.stopAll();
+        forceTrackingUpdate = true; // Force an immediate sun sync
       }
 
       request->send(200, "application/json",
