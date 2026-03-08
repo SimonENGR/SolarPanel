@@ -23,21 +23,28 @@ volatile double currentElevation = 0;
 SolarPosition *sunPosition = nullptr;
 
 // --- PIN DEFINITIONS ---
-#define PIN_CLEAN_R 32   // Permanent
-#define PIN_CLEAN_L 33   // Permanent
-#define PIN_TILT_ENA 21  // Enable pin (LOW = enabled)
-#define PIN_TILT_STEP 22 // Pulse pin (PUL+)
-#define PIN_TILT_DIR 23  // Direction pin (DIR+)
-#define PIN_ENC_A 18     // Encoder A+ (Grey wire)
-#define PIN_ENC_B 19     // Encoder B+ (Green wire)
-#define PIN_LIMIT 15     // Limit switch (home position)
-#define PIN_CURRENT 34   // Placeholder value
-#define PIN_IR_1 13      // Placeholder value
-#define PIN_IR_2 14      // Placeholder value
+#define PIN_CLEAN_R    32   // Cleaning motor IBT-2 Right
+#define PIN_CLEAN_L    33   // Cleaning motor IBT-2 Left
+#define PIN_TILT_ENA   21   // Stepper enable (LOW = enabled)
+#define PIN_TILT_STEP  22   // Stepper pulse (PUL+)
+#define PIN_TILT_DIR   23   // Stepper direction (DIR+)
+#define PIN_ENC_A      18   // Tilt encoder A+ (Grey wire)
+#define PIN_ENC_B      19   // Tilt encoder B+ (Green wire)
+#define PIN_LIMIT      15   // Tilt limit switch (home / 0°)
+#define PIN_CURRENT    34   // Solar current sensor (placeholder)
+#define PIN_IR_1       13   // IR sensor 1 (placeholder)
+#define PIN_IR_2       14   // IR sensor 2 (placeholder)
+// --- Wiper / Cleaning motor ---
+// IBT-2 drive pins reuse PIN_CLEAN_R / PIN_CLEAN_L above (no change)
+// Limit switches only — no encoder needed
+// TODO: assign real GPIO numbers once wired
+#define PIN_WIPER_LIMIT_BOTTOM  27   // Bottom limit switch (end of stroke)
+#define PIN_WIPER_LIMIT_TOP     35   // Top    limit switch (rest position)
 
 // --- MODULE INSTANTIATION ---
 MotorDriver motorSystem(PIN_CLEAN_R, PIN_CLEAN_L, PIN_TILT_ENA, PIN_TILT_STEP,
-                        PIN_TILT_DIR, PIN_ENC_A, PIN_ENC_B, PIN_LIMIT);
+                        PIN_TILT_DIR, PIN_ENC_A, PIN_ENC_B, PIN_LIMIT,
+                        PIN_WIPER_LIMIT_BOTTOM, PIN_WIPER_LIMIT_TOP);
 
 SolarWebServer webSystem(NULL, NULL);
 SensorInputManager sensorSystem(PIN_CURRENT, PIN_IR_1, PIN_IR_2);

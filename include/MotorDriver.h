@@ -1,83 +1,122 @@
-#ifndef MOTOR_DRIVER_H
-#define MOTOR_DRIVER_H
-
+#pragma once
 #include <Arduino.h>
 
-class MotorDriver {
-private:
-  // --- Cleaning Motor (IBT-2 PWM) ---
-  int cleanRPin;
-  int cleanLPin;
+// --- PWM Config (Cleaning Motor IBT-2) ---
+#define PWM_CH_R  0
+#define PWM_CH_L  1
+#define PWM_FREQ  1000
+#define PWM_RES   8
 
-  // --- Tilt Motor (Stepper + Encoder) ---
-  int pinEna;
-  int pinStep;
-  int pinDir;
-  int pinEncA;
-  int pinEncB;
+// --- Tilt Stepper Config ---
+#define STEP_DELAY   500   // microseconds between step pulses
+#define ENCODER_CPR  3600  // encoder counts per revolution (before 4x quadrature)
+#define GEAR_RATIO   10    // 1:10 gearbox
 
-  // --- Limit Switch ---
-  int pinLimitSwitch;
-  bool limitTriggered;
-  int limitDebounce;
+// --- Wiper Safety Config ---
+// Maximum time (ms) allowed for a single stroke before declaring a stall.
+// Measure your actual full-stroke time and set this to ~2x that value.
+// Example: if bottom→top takes ~4 s, set 8000 ms.
+#define WIPER_STALL_TIMEOUT_MS   8000UL
 
-  // State Tracking for Stepper
-  // 0 = Idle, 1 = Moving Up, -1 = Moving Down
-  volatile int tiltState;
+// Duration (ms) of the brief reverse relief pulse applied after a limit switch
+// fires. Just enough to relieve mechanical pressure — not a full reversal.
+#define WIPER_RELIEF_PULSE_MS    80UL
 
-  // --- Precision Positioning ---
-  volatile long targetPos;     // Target encoder position for moveToAngle
-  volatile bool isPositioning; // True when executing a precision move
-
-  // Tuning for speed (microseconds)
-  const int STEP_DELAY = 2500;
-
-  // Encoder Resolution (1x mode: RISING on A only)
-  static const int ENCODER_PPR = 3600;
-  static const int ENCODER_CPR = ENCODER_PPR; // 3600 counts/rev in 1x mode
-  static constexpr float GEAR_RATIO = 10.0f;  // 1:10 worm gear (motor:panel)
-
-  // PWM Settings
-  const int PWM_FREQ = 5000;
-  const int PWM_RES = 8;
-  const int PWM_CH_R = 0;
-  const int PWM_CH_L = 1;
-
-public:
-  // Constructor
-  MotorDriver(int cleanR, int cleanL, int enaPin, int stepPin, int dirPin,
-              int encA, int encB, int limitPin);
-
-  // Setup
-  void begin();
-
-  // Main Loop: MUST be called repeatedly in void loop()
-  void tick();
-
-  // Helper function (Legacy support)
-  void update();
-
-  // --- Movement Logic ---
-  void setCleaningMotor(int direction, int speed = 255);
-  void setTiltMotor(int direction);
-  void stopAll();
-  int getTiltState();
-
-  // --- Precision Positioning ---
-  void moveToAngle(float degrees);  // Absolute: go to this angle
-  void moveByAngle(float deltaDeg); // Relative: move by ±degrees
-  bool isMoving();                  // True if precision move in progress
-
-  // --- Encoder Logic ---
-  long getEncoderPosition();
-  void resetEncoder();
-  float getAngleDegrees();
-
-  // --- Limit Switch ---
-  bool isLimitTriggered();
-
-  // Legacy Automated Cycle
-  void initiateCleaningCycle();
+// --- Wiper Clean Cycle State Machine ---
+// Wiper rests at TOP (top limit switch pressed).
+// Cycle: DOWN until bottom switch → relief pulse UP → UP until top switch →
+//        relief pulse DOWN → stop (rest).
+enum CleanCycleState {
+  CLEAN_IDLE,
+  CLEAN_GOING_DOWN,        // Phase 1: driving down toward bottom limit switch
+  CLEAN_RELIEF_AT_BOTTOM,  // Brief upward relief pulse after bottom fires
+  CLEAN_GOING_UP,          // Phase 2: driving up back to top limit switch
+  CLEAN_RELIEF_AT_TOP,     // Brief downward relief pulse after top fires
+  CLEAN_STALLED            // Stall detected — awaiting manual intervention
 };
 
-#endif
+class MotorDriver {
+public:
+  // ----------------------------------------------------------------
+  // Constructor
+  // cleanR       = IBT-2 RPWM → wiper UP   (toward top limit switch)
+  // cleanL       = IBT-2 LPWM → wiper DOWN (toward bottom limit switch)
+  // limitBottomPin = bottom limit switch, LOW when triggered (end of stroke)
+  // limitTopPin    = top    limit switch, LOW when triggered (rest position)
+  // No wiper encoder pins — position is determined solely by limit switches
+  // ----------------------------------------------------------------
+  MotorDriver(int cleanR, int cleanL,
+              int enaPin, int stepPin, int dirPin,
+              int encA, int encB, int limitPin,
+              int limitBottomPin, int limitTopPin);
+
+  void begin();
+
+  // ----------------------------------------------------------------
+  // Tilt Motor — unchanged public interface
+  // ----------------------------------------------------------------
+  void  setTiltMotor(int direction);
+  void  moveToAngle(float degrees);
+  void  moveByAngle(float deltaDeg);
+  bool  isMoving();
+  int   getTiltState();
+  void  stopAll();
+
+  long  getEncoderPosition();
+  void  resetEncoder();
+  float getAngleDegrees();
+  bool  isLimitTriggered();
+
+  // ----------------------------------------------------------------
+  // Cleaning / Wiper Motor
+  // ----------------------------------------------------------------
+  void  setCleaningMotor(int direction, int speed); // raw IBT-2 control
+  void  initiateFullCleanCycle();                   // start autonomous cycle
+  void  initiateCleaningCycle();                    // legacy shim
+
+  bool  isWiperMoving()    { return cleanCycleState != CLEAN_IDLE && cleanCycleState != CLEAN_STALLED; }
+  bool  isWiperStalled()   { return cleanCycleState == CLEAN_STALLED; }
+  bool  isTopLimitHit()    { return topLimitTriggered; }
+  bool  isBottomLimitHit() { return bottomLimitTriggered; }
+
+  // ----------------------------------------------------------------
+  // Main loop driver
+  // ----------------------------------------------------------------
+  void tick();
+
+private:
+  // --- Tilt motor pins ---
+  int pinEna, pinStep, pinDir;
+  int pinEncA, pinEncB;
+  int pinLimitSwitch;
+
+  // --- Cleaning motor pins ---
+  int cleanRPin, cleanLPin;
+
+  // --- Wiper limit switch pins (read-only inputs) ---
+  int pinLimitBottom;   // bottom of stroke
+  int pinLimitTop;      // top of stroke (rest position)
+
+  // --- Tilt state ---
+  volatile int  tiltState;
+  volatile long targetPos;
+  volatile bool isPositioning;
+  volatile bool limitTriggered;
+  int           limitDebounce;
+
+  // --- Wiper state ---
+  volatile bool            bottomLimitTriggered;
+  volatile bool            topLimitTriggered;
+  int                      bottomDebounce;
+  int                      topDebounce;
+  volatile CleanCycleState cleanCycleState;
+
+  // Stall detection: timestamp when the current stroke phase started
+  unsigned long            wiperPhaseStartMs;
+
+  // Relief pulse: timestamp when the relief pulse started
+  unsigned long            wiperReliefStartMs;
+
+  // Internal helper: transition to a new state and reset the stall timer
+  void wiperEnterState(CleanCycleState newState);
+};

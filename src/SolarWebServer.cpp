@@ -62,6 +62,8 @@ void SolarWebServer::setupRoutes() {
     doc["tilt_angle"] = motorSystem.getAngleDegrees();
     doc["encoder_pos"] = motorSystem.getEncoderPosition();
     doc["limit_triggered"] = motorSystem.isLimitTriggered();
+    doc["wiper_moving"]    = motorSystem.isWiperMoving();
+    doc["wiper_stalled"]   = motorSystem.isWiperStalled();
 
     String response;
     serializeJson(doc, response);
@@ -132,6 +134,32 @@ void SolarWebServer::setupRoutes() {
     doc["angle"] = motorSystem.getAngleDegrees();
     doc["position"] = motorSystem.getEncoderPosition();
     doc["moving"] = motorSystem.isMoving();
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+
+  // --- WIPER CONTROL ENDPOINT ---
+  // /wiper?clean=1  → trigger full clean cycle (down → up to rest)
+  // /wiper          → returns current wiper status
+  server.on("/wiper", HTTP_GET, [](AsyncWebServerRequest *request) {
+    isManualOverride = true;
+
+    if (request->hasParam("clean")) {
+      motorSystem.initiateFullCleanCycle();
+
+      StaticJsonDocument<128> doc;
+      doc["message"]      = "Clean cycle started";
+      doc["wiper_moving"] = motorSystem.isWiperMoving();
+      String response;
+      serializeJson(doc, response);
+      request->send(200, "application/json", response);
+      return;
+    }
+
+    // No params — return current wiper status
+    StaticJsonDocument<128> doc;
+    doc["wiper_moving"] = motorSystem.isWiperMoving();
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
