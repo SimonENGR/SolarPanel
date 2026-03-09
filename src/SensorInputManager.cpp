@@ -1,3 +1,8 @@
+/**
+ * @file SensorInputManager.cpp
+ * @brief Handles reading data from attached external sensors (IR, Current).
+ */
+
 #include "SensorInputManager.h"
 
 SensorInputManager::SensorInputManager(int currentPin, int ir1Pin, int ir2Pin) {
@@ -15,7 +20,7 @@ void SensorInputManager::begin() {
 
 void SensorInputManager::update() {
     // 1. Read IR Sensors
-    // Standard IR sensors usually go LOW when they see an reflection (obstacle)
+    // Standard IR sensors usually go LOW when they see a reflection (obstacle)
     ir1Blocked = (digitalRead(pinIR1) == LOW);
     ir2Blocked = (digitalRead(pinIR2) == LOW);
 
@@ -26,15 +31,15 @@ void SensorInputManager::update() {
 }
 
 float SensorInputManager::getMotorCurrent() {
-    return lastCurrentReading;
+    return solarCurrentAmps;
 }
 
 bool SensorInputManager::isIR1Triggered() {
-    return ir1State; // Assuming HIGH means triggered
+    return ir1Blocked; 
 }
 
 bool SensorInputManager::isIR2Triggered() {
-    return ir2State;
+    return ir2Blocked;
 }
 
 bool SensorInputManager::isCurrentBelowThreshold() {

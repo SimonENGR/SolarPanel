@@ -1,3 +1,11 @@
+/**
+ * @file main.cpp
+ * @brief Main entry point for the ESP32 Solar Tracker Firmware.
+ * 
+ * Orchestrates FreeRTOS tasks (Network, Solar Math, Motor Control), handles 
+ * system initialization, and manages the primary hardware loop.
+ */
+
 #include "BleProvisioningManager.h"
 #include "Globals.h"
 #include "MotorDriver.h"
@@ -11,7 +19,9 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-// --- GLOBALS ---
+// ======================================================================
+// GLOBALS
+// ======================================================================
 volatile bool isWifiConnected = false;
 volatile bool isSystemInitialized = false;
 volatile bool isManualOverride = false;
@@ -22,7 +32,9 @@ volatile double currentAzimuth = 0;
 volatile double currentElevation = 0;
 SolarPosition *sunPosition = nullptr;
 
-// --- PIN DEFINITIONS ---
+// ======================================================================
+// PIN DEFINITIONS
+// ======================================================================
 #define PIN_CLEAN_R    32   // Cleaning motor IBT-2 Right
 #define PIN_CLEAN_L    33   // Cleaning motor IBT-2 Left
 #define PIN_TILT_ENA   21   // Stepper enable (LOW = enabled)
@@ -41,7 +53,9 @@ SolarPosition *sunPosition = nullptr;
 #define PIN_WIPER_LIMIT_BOTTOM  27   // Bottom limit switch (end of stroke)
 #define PIN_WIPER_LIMIT_TOP     35   // Top    limit switch (rest position)
 
-// --- MODULE INSTANTIATION ---
+// ======================================================================
+// MODULE INSTANTIATION
+// ======================================================================
 MotorDriver motorSystem(PIN_CLEAN_R, PIN_CLEAN_L, PIN_TILT_ENA, PIN_TILT_STEP,
                         PIN_TILT_DIR, PIN_ENC_A, PIN_ENC_B, PIN_LIMIT,
                         PIN_WIPER_LIMIT_BOTTOM, PIN_WIPER_LIMIT_TOP);
@@ -116,7 +130,7 @@ void motorTaskCode(void *parameter) {
            sensorSystem.areIRSensorsReflected()) &&
           (now - lastCleaningTime > CLEANING_COOLDOWN)) {
         Serial.println("[AUTO] Triggering Maintenance...");
-        motorSystem.initiateCleaningCycle();
+        motorSystem.initiateFullCleanCycle();
         lastCleaningTime = millis();
       }
 
@@ -192,17 +206,8 @@ void setup() {
 
   Serial.begin(9600);
 
-  long startWait = millis();
-  while (!Serial && (millis() - startWait < 3000)) {
-    delay(10);
-  }
-  delay(2000); // Extra delay for external power supply stabilization
-
-  Serial.println("\n\n>>> ESP32 SOLAR TRACKER STARTING <<<");
-  motorSystem.begin();
-
   // ====================================================================
-  // BLE HARDWARE CHECK
+  // BLE HARDWARE DIAGNOSTIC
   // ====================================================================
   Serial.println("\n--- BLE Diagnostic ---");
   BLEDevice::init(""); // Temporary init to test hardware

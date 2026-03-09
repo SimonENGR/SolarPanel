@@ -1,3 +1,8 @@
+/**
+ * @file SolarWebServer.cpp
+ * @brief Serves the HTTP API linking the Android App to the ESP32.
+ */
+
 #include "SolarWebServer.h"
 #include "MotorDriver.h"
 

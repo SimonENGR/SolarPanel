@@ -72,7 +72,6 @@ public:
   // ----------------------------------------------------------------
   void  setCleaningMotor(int direction, int speed); // raw IBT-2 control
   void  initiateFullCleanCycle();                   // start autonomous cycle
-  void  initiateCleaningCycle();                    // legacy shim
 
   bool  isWiperMoving()    { return cleanCycleState != CLEAN_IDLE && cleanCycleState != CLEAN_STALLED; }
   bool  isWiperStalled()   { return cleanCycleState == CLEAN_STALLED; }

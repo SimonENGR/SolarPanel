@@ -11,10 +11,6 @@ class SensorInputManager {
         int pinIR2;
 
         // Raw Data Storage
-        float lastCurrentReading;
-        bool ir1State;
-        bool ir2State;
-
         float solarCurrentAmps;
         bool ir1Blocked;
         bool ir2Blocked;

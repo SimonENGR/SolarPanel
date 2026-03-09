@@ -1,3 +1,8 @@
+/**
+ * @file BleProvisioningManager.cpp
+ * @brief Handles Bluetooth Low Energy (BLE) Wi-Fi Provisioning and Broadcasting.
+ */
+
 #include "BleProvisioningManager.h"
 #include <BLESecurity.h>
 #include <Preferences.h>
@@ -12,11 +17,9 @@ public:
     ServerCallbacks(BleProvisioningManager* m) { manager = m; }
     void onConnect(BLEServer* pServer) { 
         Serial.println("[BLE] Client connected");
-        manager->setDeviceConnected(true); 
     }
     void onDisconnect(BLEServer* pServer) { 
         Serial.println("[BLE] Client disconnected");
-        manager->setDeviceConnected(false); 
         // Restart advertising so others can connect
         pServer->getAdvertising()->start();
         Serial.println("[BLE] Advertising restarted");
@@ -51,7 +54,6 @@ public:
 // --- IMPLEMENTATION ---
 
 BleProvisioningManager::BleProvisioningManager() {
-    deviceConnected = false;
     credentialsReceived = false;
     bleActive = false;
     pServer = nullptr;
@@ -194,19 +196,6 @@ void BleProvisioningManager::beginStatusBroadcast() {
     Serial.println("[BLE] STATUS BROADCAST ACTIVE - Device: ESP32-Solar-Online");
 }
 
-void BleProvisioningManager::update() {
-    // Maintenance if needed
-}
-
-void BleProvisioningManager::stop() {
-    if (bleActive) {
-        BLEDevice::deinit(true); // Turn off radio to save power
-        bleActive = false;
-        Serial.println("[BLE] Stopped.");
-    }
-}
-
-bool BleProvisioningManager::isClientConnected() { return deviceConnected; }
 bool BleProvisioningManager::hasCredentials() { return credentialsReceived; }
 String BleProvisioningManager::getSSID() { return receivedSSID; }
 String BleProvisioningManager::getPassword() { return receivedPass; }
@@ -234,6 +223,10 @@ void BleProvisioningManager::setCredentials(String ssid, String pass) {
     }
 }
 
-void BleProvisioningManager::setDeviceConnected(bool connected) {
-    deviceConnected = connected;
+void BleProvisioningManager::stop() {
+    if (bleActive) {
+        BLEDevice::deinit(true);
+        bleActive = false;
+        Serial.println("[BLE] Provisioning Manager stopped");
+    }
 }

@@ -221,13 +221,19 @@ bool MotorDriver::isMoving() { return isPositioning; }
 // WIPER CLEAN CYCLE
 // ======================================================================
 
-// Helper: transition to a new wiper state and reset both timers.
+/**
+ * @brief Helper to transition the wiper state machine and reset stall timers.
+ * @param newState The CleanCycleState to enter.
+ */
 void MotorDriver::wiperEnterState(CleanCycleState newState) {
   cleanCycleState    = newState;
   wiperPhaseStartMs  = millis();
   wiperReliefStartMs = millis();
 }
 
+/**
+ * @brief Initiates a full automated wipe down-and-up cycle.
+ */
 void MotorDriver::initiateFullCleanCycle() {
   if (cleanCycleState != CLEAN_IDLE) {
     Serial.println("[WIPER] Clean cycle already in progress — ignoring.");
@@ -240,10 +246,6 @@ void MotorDriver::initiateFullCleanCycle() {
   wiperEnterState(CLEAN_GOING_DOWN);
   setCleaningMotor(-1, 255); // DOWN
   Serial.println("[WIPER] >>> CLEAN CYCLE STARTED — Phase 1: Going DOWN <<<");
-}
-
-void MotorDriver::initiateCleaningCycle() {
-  initiateFullCleanCycle();
 }
 
 // ======================================================================

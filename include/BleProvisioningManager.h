@@ -21,7 +21,6 @@ private:
     BLECharacteristic *pPassCharacteristic;
     BLECharacteristic *pStatusCharacteristic;
 
-    bool deviceConnected;
     bool credentialsReceived;
     bool bleActive;
     
@@ -40,27 +39,15 @@ public:
     // Start BLE in status-only broadcast mode (when WiFi already configured)
     void beginStatusBroadcast();
     
-    void update();
-    void stop();
-
-    // Load previously saved WiFi credentials from flash
-    bool loadSavedCredentials();
+    void setCredentials(String ssid, String pass);
     
-    // Clear saved credentials (useful for factory reset)
+    bool loadSavedCredentials();
     void clearSavedCredentials();
-
-    // Status Getters
-    bool isClientConnected();
     bool hasCredentials();
     String getSSID();
     String getPassword();
-
-    // Send status update to phone via BLE
     void sendStatus(String status);
-
-    // Called by BLE callbacks
-    void setCredentials(String ssid, String pass);
-    void setDeviceConnected(bool connected);
+    void stop();
 };
 
 #endif
