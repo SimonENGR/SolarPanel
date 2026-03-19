@@ -50,18 +50,21 @@ void SolarWebServer::setupRoutes() {
 
   // --- STATUS ENDPOINT ---
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-    StaticJsonDocument<300> doc;
+    StaticJsonDocument<512> doc;
 
-    // Determine status string
-    if (isManualOverride) {
+    // Mode string for display
+    if (trackingMode == MODE_MANUAL) {
       doc["status"] = "MANUAL";
+    } else if (trackingMode == MODE_SEMI_AUTO) {
+      doc["status"] = "SEMI_AUTO";
     } else if (isSystemInitialized) {
       doc["status"] = "AUTO";
     } else {
       doc["status"] = "WAITING";
     }
 
-    doc["override"] = isManualOverride;
+    doc["override"] = (trackingMode == MODE_MANUAL);
+    doc["mode"] = trackingMode; // 0=AUTO, 1=SEMI, 2=MANUAL
     doc["azimuth"] = currentAzimuth;
     doc["elevation"] = currentElevation;
     doc["tilt_angle"] = motorSystem.getAngleDegrees();
@@ -69,6 +72,9 @@ void SolarWebServer::setupRoutes() {
     doc["limit_triggered"] = motorSystem.isLimitTriggered();
     doc["wiper_moving"]    = motorSystem.isWiperMoving();
     doc["wiper_stalled"]   = motorSystem.isWiperStalled();
+    doc["weather_condition"] = currentWeatherCondition;
+    doc["weather_override"] = weatherOverrideAngle;
+    doc["weather_pending"] = weatherPendingConfirmation;
 
     String response;
     serializeJson(doc, response);
@@ -104,7 +110,7 @@ void SolarWebServer::setupRoutes() {
   // /angle              → returns current angle + moving status
   server.on("/angle", HTTP_GET, [](AsyncWebServerRequest *request) {
     // CRITICAL: Force Manual Mode when App explicitly commands a new angle
-    isManualOverride = true;
+    trackingMode = MODE_MANUAL;
 
     if (request->hasParam("target")) {
       float target = request->getParam("target")->value().toFloat();
@@ -148,7 +154,7 @@ void SolarWebServer::setupRoutes() {
   // /wiper?clean=1  → trigger full clean cycle (down → up to rest)
   // /wiper          → returns current wiper status
   server.on("/wiper", HTTP_GET, [](AsyncWebServerRequest *request) {
-    isManualOverride = true;
+    trackingMode = MODE_MANUAL;
 
     if (request->hasParam("clean")) {
       motorSystem.initiateFullCleanCycle();
@@ -179,7 +185,7 @@ void SolarWebServer::setupRoutes() {
 
       // CRITICAL: Force Manual Mode when App takes control
       // This prevents the auto-tracker from fighting the user
-      isManualOverride = true;
+      trackingMode = MODE_MANUAL;
 
       if (type == "clean") {
         // Direction: 1 (Fwd), -1 (Rev), 0 (Stop)
@@ -207,24 +213,100 @@ void SolarWebServer::setupRoutes() {
 
   // --- MODE CONTROL ---
   server.on("/mode", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("manual")) {
-      int val = request->getParam("manual")->value().toInt();
-      isManualOverride = (val == 1);
+    if (request->hasParam("mode")) {
+      int val = request->getParam("mode")->value().toInt();
+      trackingMode = constrain(val, 0, 2);
 
       // Safety: Stop motors when switching modes to prevent runaway
       motorSystem.stopAll();
 
-      if (!isManualOverride) {
+      if (trackingMode != MODE_MANUAL) {
         forceTrackingUpdate = true; // Force an immediate sun sync
       }
 
+      // Clear weather pending when mode changes
+      weatherPendingConfirmation = false;
+
+      const char* modeNames[] = {"Auto", "Semi-Auto", "Manual"};
+      String msg = "{\"message\":\"" + String(modeNames[trackingMode]) + " Mode\"}";
+      request->send(200, "application/json", msg);
+
+    // Legacy support: also accept ?manual=0|1
+    } else if (request->hasParam("manual")) {
+      int val = request->getParam("manual")->value().toInt();
+      trackingMode = (val == 1) ? MODE_MANUAL : MODE_AUTOMATIC;
+      motorSystem.stopAll();
+      if (trackingMode != MODE_MANUAL) forceTrackingUpdate = true;
+      weatherPendingConfirmation = false;
       request->send(200, "application/json",
-                    isManualOverride ? "{\"message\":\"Manual Mode\"}"
-                                     : "{\"message\":\"Auto Mode\"}");
+                    trackingMode == MODE_MANUAL ? "{\"message\":\"Manual Mode\"}"
+                                               : "{\"message\":\"Auto Mode\"}");
     } else {
       request->send(400, "application/json",
-                    "{\"message\":\"Missing manual param\"}");
+                    "{\"message\":\"Missing mode param\"}");
     }
+  });
+
+  // --- WEATHER CONTROL (Semi-Auto Confirm + Manual Override) ---
+  server.on("/weather", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // Semi-auto confirmation
+    if (request->hasParam("confirm")) {
+      int confirm = request->getParam("confirm")->value().toInt();
+      if (confirm == 1) {
+        // User approved the weather override
+        weatherPendingConfirmation = false;
+        forceTrackingUpdate = true;
+        Serial.println("[WEATHER] User confirmed weather override");
+        request->send(200, "application/json",
+                      "{\"message\":\"Weather override confirmed\"}");
+      } else {
+        // User rejected — clear the override
+        weatherPendingConfirmation = false;
+        weatherOverrideAngle = -1;
+        forceTrackingUpdate = true;
+        Serial.println("[WEATHER] User rejected weather override");
+        request->send(200, "application/json",
+                      "{\"message\":\"Weather override rejected\"}");
+      }
+      return;
+    }
+
+    // Manual weather override (from app buttons)
+    if (request->hasParam("condition")) {
+      String cond = request->getParam("condition")->value();
+      int angle = -1;
+      if (cond == "overcast")  angle = 90;
+      else if (cond == "rain") angle = 60;
+      else if (cond == "snow") angle = 15;
+      else if (cond == "clear") angle = -1;
+
+      weatherOverrideAngle = angle;
+      weatherPendingConfirmation = false;
+      currentWeatherCondition = cond;
+
+      // Immediately move to the target angle
+      if (angle >= 0) {
+        motorSystem.moveToAngle((float)angle);
+        Serial.printf("[WEATHER] Button pressed: %s → moving to %d°\n", cond.c_str(), angle);
+      } else {
+        // Clear: resume sun tracking
+        forceTrackingUpdate = true;
+        Serial.println("[WEATHER] Button pressed: clear → resuming sun tracking");
+      }
+
+      String msg = "{\"message\":\"Weather set: " + cond + "\",\"angle\":" + String(angle) + "}";
+      request->send(200, "application/json", msg);
+      return;
+    }
+
+    // No params — return current weather state
+    StaticJsonDocument<256> doc;
+    doc["condition"] = currentWeatherCondition;
+    doc["override_angle"] = weatherOverrideAngle;
+    doc["pending"] = weatherPendingConfirmation;
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
   });
 
   // --- DATA UPDATE (GPS SYNC) ---

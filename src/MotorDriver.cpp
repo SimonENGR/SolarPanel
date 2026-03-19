@@ -29,6 +29,8 @@ MotorDriver::MotorDriver(int cleanR, int cleanL,
   this->tiltState       = 0;
   this->targetPos       = 0;
   this->isPositioning   = false;
+  this->isHomed         = false;
+  this->isHoming        = false;
 
   // Wiper state
   this->bottomLimitTriggered = false;
@@ -107,9 +109,9 @@ void MotorDriver::begin() {
   // ----------------------------------------------------------------
   pinMode(pinLimitSwitch, INPUT_PULLUP);
   delay(10);
-  limitTriggered = (digitalRead(pinLimitSwitch) == LOW);
+  limitTriggered = (digitalRead(pinLimitSwitch) == HIGH);
   Serial.println("[MOTOR] Tilt limit switch on GPIO " + String(pinLimitSwitch) +
-                 (limitTriggered ? " (pressed)" : " (open)"));
+                 (limitTriggered ? " (pressed/HIGH)" : " (open/LOW)"));
 
   // ----------------------------------------------------------------
   // 4. Wiper limit switches (read-only — no encoder needed)
@@ -140,6 +142,96 @@ void MotorDriver::begin() {
 }
 
 // ======================================================================
+// HOMING PROCEDURE
+// ======================================================================
+
+/**
+ * @brief BLOCKING homing: drives the motor directly toward the limit switch.
+ *        Does NOT depend on tick() or the positioning system.
+ *        Steps the motor, reads the switch, and stops when triggered.
+ *        Safe to call before isSystemInitialized.
+ */
+void MotorDriver::homeToZero() {
+  Serial.printf("[HOME] Limit switch pin %d initial read: %s\n",
+                pinLimitSwitch,
+                digitalRead(pinLimitSwitch) == HIGH ? "HIGH (triggered)" : "LOW (open)");
+
+  // If limit switch is already pressed, just reset encoder
+  if (digitalRead(pinLimitSwitch) == HIGH) {
+    resetEncoder();
+    isHomed  = true;
+    isHoming = false;
+    limitTriggered = true;
+    Serial.println("[HOME] Already at limit switch - encoder zeroed.");
+    return;
+  }
+
+  Serial.println("[HOME] Driving motor toward limit switch (blocking)...");
+  isHoming = true;
+  isPositioning = false;
+
+  // Enable motor, direction toward limit switch
+  // (pinDir LOW = DOWN / toward 0 degrees / toward limit switch)
+  digitalWrite(pinEna, LOW);
+  digitalWrite(pinDir, LOW);
+  tiltState = 0; // Keep at 0 so tick() in loop doesn't double-step us
+
+  unsigned long startMs = millis();
+  unsigned long lastPrintMs = 0;
+  const unsigned long TIMEOUT_MS = 150000; // 150s — accounts for 1:50 gear ratio
+  int debounceCount = 0;
+  long steps = 0;
+
+  while (millis() - startMs < TIMEOUT_MS) {
+    // Generate one step pulse (slower than normal for reliable detection)
+    digitalWrite(pinStep, HIGH);
+    delayMicroseconds(STEP_DELAY * 2);  // Slower stepping during homing
+    digitalWrite(pinStep, LOW);
+    delayMicroseconds(STEP_DELAY * 2);
+    steps++;
+
+    // Check limit switch (HIGH = pressed)
+    if (digitalRead(pinLimitSwitch) == HIGH) {
+      debounceCount++;
+      if (debounceCount >= 10) {
+        // CONFIRMED: limit switch triggered
+        tiltState = 0;
+        digitalWrite(pinEna, HIGH);
+        resetEncoder();
+        isHomed = true;
+        isHoming = false;
+        limitTriggered = true;
+        Serial.printf("[HOME] HOMED after %ld steps - encoder zeroed\n", steps);
+        return;
+      }
+    } else {
+      debounceCount = 0;
+    }
+
+    // Yield to watchdog every 500 steps (~1s at this speed)
+    if (steps % 500 == 0) {
+      vTaskDelay(1 / portTICK_PERIOD_MS);
+      unsigned long now = millis();
+      if (now - lastPrintMs >= 2000) {
+        Serial.printf("[HOME] ...steps=%ld, switch=%s, elapsed=%lums\n",
+                      steps,
+                      digitalRead(pinLimitSwitch) == HIGH ? "HIGH" : "LOW",
+                      now - startMs);
+        lastPrintMs = now;
+      }
+    }
+  }
+
+  // TIMEOUT: stop motor
+  tiltState = 0;
+  digitalWrite(pinEna, HIGH);
+  isHoming = false;
+  Serial.printf("[HOME] TIMEOUT after %ld steps - switch never triggered!\n", steps);
+}
+
+bool MotorDriver::isHomingComplete() { return isHomed; }
+
+// ======================================================================
 // TILT MOTOR METHODS — completely unchanged
 // ======================================================================
 
@@ -167,11 +259,11 @@ void MotorDriver::setTiltMotor(int direction) {
 
   if (direction == 1) {
     digitalWrite(pinEna, LOW);
-    digitalWrite(pinDir, LOW);
+    digitalWrite(pinDir, HIGH); // HIGH = UP
     Serial.println("[MOTOR] Tilt: UP (manual)");
   } else if (direction == -1) {
     digitalWrite(pinEna, LOW);
-    digitalWrite(pinDir, HIGH);
+    digitalWrite(pinDir, LOW);  // LOW = DOWN
     Serial.println("[MOTOR] Tilt: DOWN (manual)");
   } else {
     digitalWrite(pinEna, HIGH);
@@ -194,6 +286,9 @@ void MotorDriver::stopAll() {
 }
 
 void MotorDriver::moveToAngle(float degrees) {
+  // SAFETY: Clamp to 0 minimum
+  if (degrees < 0.0f) degrees = 0.0f;
+
   targetPos     = (long)(degrees * (ENCODER_CPR * 4) * GEAR_RATIO / 360.0f);
   isPositioning = true;
 
@@ -201,10 +296,11 @@ void MotorDriver::moveToAngle(float degrees) {
   int  dir        = (targetPos > currentPos) ? 1 : -1;
 
   digitalWrite(pinEna, LOW);
-  digitalWrite(pinDir, (dir == 1) ? LOW : HIGH);
+  // dir == 1 (UP) requires pinDir = HIGH. dir == -1 (DOWN) requires pinDir = LOW.
+  digitalWrite(pinDir, (dir == 1) ? HIGH : LOW);
   tiltState = dir;
 
-  Serial.printf("[POSITION] Moving to %.2f° (target: %ld, current: %ld)\n",
+  Serial.printf("[POSITION] Moving to %.2f deg (target: %ld, current: %ld)\n",
                 degrees, targetPos, currentPos);
 }
 
@@ -258,17 +354,19 @@ void MotorDriver::tick() {
   getEncoderPosition();
 
   // ----------------------------------------------------------------
-  // 1. Tilt limit switch debounce — unchanged
+  // 1. Tilt limit switch debounce — HIGH = triggered (NC switch config)
   // ----------------------------------------------------------------
-  if (digitalRead(pinLimitSwitch) == LOW) {
+  if (digitalRead(pinLimitSwitch) == HIGH) {
     limitDebounce++;
     if (limitDebounce >= 5 && !limitTriggered) {
       limitTriggered = true;
       tiltState      = 0;
       isPositioning  = false;
+      isHoming       = false;
+      isHomed        = true;
       digitalWrite(pinEna, HIGH);
       resetEncoder();
-      Serial.println("[LIMIT] *** TILT HOME — Motor stopped, angle = 0° ***");
+      Serial.println("[LIMIT] *** TILT HOME — Motor stopped, encoder zeroed, isHomed=true ***");
     }
   } else {
     limitDebounce  = 0;
@@ -292,13 +390,14 @@ void MotorDriver::tick() {
       int dir = (error > 0) ? 1 : -1;
       if (tiltState != dir) {
         tiltState = dir;
-        digitalWrite(pinDir, (dir == 1) ? LOW : HIGH);
+        // dir == 1 (UP) requires pinDir = HIGH. dir == -1 (DOWN) requires pinDir = LOW.
+        digitalWrite(pinDir, (dir == 1) ? HIGH : LOW);
       }
     }
   }
 
   // ----------------------------------------------------------------
-  // 3. Tilt stepper pulse — unchanged
+  // 3. Tilt stepper pulse
   // ----------------------------------------------------------------
   if (tiltState != 0) {
     digitalWrite(pinStep, HIGH);
@@ -442,15 +541,21 @@ long MotorDriver::getEncoderPosition() {
   if (diff > 16383)       diff -= 32768;
   else if (diff < -16384) diff += 32768;
 
-  double true_diff = (double)(-diff);
-
+  double true_diff = (double)(diff);
+  
+  // Asymmetric calibration: going UP vs going DOWN
+  // Raw 90° UP   reads as ~61° raw counts -> 90 / 61 = 1.475 multiplier
+  // Raw 90° DOWN reads as ~90° raw counts -> 90 / 90 = 1.0 multiplier
   if (true_diff > 0) {
-    true_diff *= (90.0 / 86.0);
-  } else if (true_diff < 0) {
-    true_diff *= (90.0 / 64.0);
+    cheated_pcnt_accum += true_diff * 1.475; // Upward scaling works (0 -> 90)
+  } else {
+    // Previous downward scaling of 0.742 resulted in (0, 90, 30).
+    // This means 90° of physical downward travel only registered as 60° of encoder travel (90 - 30 = 60).
+    // Therefore, the raw downward ticks represent 60°. We need them to represent 90°.
+    // New multiplier ratio: 90 / 60 = 1.5. 
+    // Old multiplier was 0.742 * 1.5 = 1.113. Let's use 1.12 to be safe and ensure it reaches 0.
+    cheated_pcnt_accum += true_diff * 1.115;
   }
-
-  cheated_pcnt_accum += true_diff;
   last_pcnt           = count;
   long current_pos    = (long)cheated_pcnt_accum;
   portEXIT_CRITICAL_ISR(&encoder_mux);

@@ -8,9 +8,10 @@
 #define PWM_RES   8
 
 // --- Tilt Stepper Config ---
-#define STEP_DELAY   500   // microseconds between step pulses
+#define STEP_DELAY   1000  // microseconds between step pulses (matches homing speed)
 #define ENCODER_CPR  3600  // encoder counts per revolution (before 4x quadrature)
-#define GEAR_RATIO   10    // 1:10 gearbox
+#define GEAR_RATIO   50    // 1:50 worm gear
+
 
 // --- Wiper Safety Config ---
 // Maximum time (ms) allowed for a single stroke before declaring a stall.
@@ -62,6 +63,10 @@ public:
   int   getTiltState();
   void  stopAll();
 
+  // Homing: drive toward limit switch, reset encoder as 0°
+  void  homeToZero();           // blocking until limit switch hit
+  bool  isHomingComplete();     // has the system been homed at least once?
+
   long  getEncoderPosition();
   void  resetEncoder();
   float getAngleDegrees();
@@ -102,6 +107,8 @@ private:
   volatile bool isPositioning;
   volatile bool limitTriggered;
   int           limitDebounce;
+  volatile bool isHomed;        // has been homed at least once
+  volatile bool isHoming;       // currently in homing procedure
 
   // --- Wiper state ---
   volatile bool            bottomLimitTriggered;
