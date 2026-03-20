@@ -19,21 +19,22 @@
 // Example: if bottom→top takes ~4 s, set 8000 ms.
 #define WIPER_STALL_TIMEOUT_MS   8000UL
 
-// Duration (ms) of the brief reverse relief pulse applied after a limit switch
-// fires. Just enough to relieve mechanical pressure — not a full reversal.
-#define WIPER_RELIEF_PULSE_MS    80UL
+// Duration (ms) the cleaning pump runs after the wiper reaches the bottom.
+// Adjust this to how long the pump needs to prime and spray.
+// TODO: Tune this value once the pump is wired and tested.
+#define WIPER_PUMP_DURATION_MS   3000UL
 
 // --- Wiper Clean Cycle State Machine ---
-// Wiper rests at TOP (top limit switch pressed).
-// Cycle: DOWN until bottom switch → relief pulse UP → UP until top switch →
-//        relief pulse DOWN → stop (rest).
+// Wiper rests at BOTTOM (bottom limit switch pressed).
+// Cycle: DOWN until bottom switch → PUMP activates → UP until top switch →
+//        DOWN until bottom switch (rest) → IDLE.
 enum CleanCycleState {
   CLEAN_IDLE,
-  CLEAN_GOING_DOWN,        // Phase 1: driving down toward bottom limit switch
-  CLEAN_RELIEF_AT_BOTTOM,  // Brief upward relief pulse after bottom fires
-  CLEAN_GOING_UP,          // Phase 2: driving up back to top limit switch
-  CLEAN_RELIEF_AT_TOP,     // Brief downward relief pulse after top fires
-  CLEAN_STALLED            // Stall detected — awaiting manual intervention
+  CLEAN_GOING_DOWN,          // Phase 1: driving down toward bottom limit switch
+  CLEAN_PUMPING,             // Phase 2: wiper stopped at bottom, pump running
+  CLEAN_GOING_UP,            // Phase 3: driving up toward top limit switch
+  CLEAN_GOING_DOWN_TO_REST,  // Phase 4: driving back down to rest at bottom
+  CLEAN_STALLED              // Stall detected — awaiting manual intervention
 };
 
 class MotorDriver {

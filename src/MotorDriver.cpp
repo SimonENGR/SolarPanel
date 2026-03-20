@@ -128,16 +128,16 @@ void MotorDriver::begin() {
   Serial.println("[WIPER] Top    limit switch on GPIO " + String(pinLimitTop) +
                  (atTop    ? " (pressed)" : " (open)"));
 
-  if (atTop) {
-    Serial.println("[WIPER] Boot: wiper confirmed at rest (top). Ready.");
-  } else if (atBottom) {
-    Serial.println("[WIPER] Boot: wiper at bottom — driving UP to rest position.");
-    wiperEnterState(CLEAN_GOING_UP);
-    setCleaningMotor(1, 255); // UP
+  if (atBottom) {
+    Serial.println("[WIPER] Boot: wiper confirmed at rest (bottom). Ready.");
+  } else if (atTop) {
+    Serial.println("[WIPER] Boot: wiper at top — driving DOWN to rest position.");
+    wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
+    setCleaningMotor(-1, 180); // DOWN at reduced speed to rest
   } else {
-    Serial.println("[WIPER] Boot: wiper position unknown — driving UP to rest position.");
-    wiperEnterState(CLEAN_GOING_UP);
-    setCleaningMotor(1, 255); // UP — will stop when top switch fires
+    Serial.println("[WIPER] Boot: wiper position unknown — driving DOWN to rest position.");
+    wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
+    setCleaningMotor(-1, 180); // DOWN — will stop when bottom switch fires
   }
 }
 
@@ -408,6 +408,7 @@ void MotorDriver::tick() {
 
   // ----------------------------------------------------------------
   // 4. Wiper state machine
+  //    Sequence: GOING_DOWN → PUMPING → GOING_UP → GOING_DOWN_TO_REST → IDLE
   // ----------------------------------------------------------------
   unsigned long now = millis();
 
@@ -418,7 +419,7 @@ void MotorDriver::tick() {
       break;
 
     // ----------------------------------------------------------
-    // PHASE 1: Travelling DOWN toward bottom limit switch
+    // PHASE 1: Travel DOWN toward bottom limit switch
     // ----------------------------------------------------------
     case CLEAN_GOING_DOWN: {
       // --- Stall detection ---
@@ -436,12 +437,13 @@ void MotorDriver::tick() {
           bottomLimitTriggered = true;
           Serial.println("[WIPER] Bottom limit switch triggered");
 
-          // Stop, then apply brief UP relief pulse
-          setCleaningMotor(0, 0);
-          delay(10); // tiny settle before reversing
-          setCleaningMotor(1, 180); // UP at reduced power — relief only
-          wiperEnterState(CLEAN_RELIEF_AT_BOTTOM);
-          Serial.println("[WIPER] Relief pulse UP started");
+          setCleaningMotor(0, 0); // Stop wiper at bottom
+
+          // TODO: Activate cleaning pump here once GPIO is wired.
+          //   Example: digitalWrite(PIN_PUMP, HIGH);
+
+          wiperEnterState(CLEAN_PUMPING);
+          Serial.println("[WIPER] Phase 2: Pump ON — waiting " + String(WIPER_PUMP_DURATION_MS) + "ms");
         }
       } else {
         bottomDebounce       = 0;
@@ -451,21 +453,22 @@ void MotorDriver::tick() {
     }
 
     // ----------------------------------------------------------
-    // RELIEF PULSE after bottom switch — brief UP burst
+    // PHASE 2: Pump running at bottom — wait for duration then go up
     // ----------------------------------------------------------
-    case CLEAN_RELIEF_AT_BOTTOM: {
-      if (now - wiperReliefStartMs >= WIPER_RELIEF_PULSE_MS) {
-        setCleaningMotor(0, 0);
-        delay(30); // brief pause before starting upward stroke
+    case CLEAN_PUMPING: {
+      if (now - wiperPhaseStartMs >= WIPER_PUMP_DURATION_MS) {
+        // TODO: Deactivate pump here once GPIO is wired.
+        //   Example: digitalWrite(PIN_PUMP, LOW);
+
+        Serial.println("[WIPER] Pump OFF. Phase 3: Going UP <<<");
         setCleaningMotor(1, 255); // UP full speed
         wiperEnterState(CLEAN_GOING_UP);
-        Serial.println("[WIPER] Phase 2: Going UP to rest position");
       }
       break;
     }
 
     // ----------------------------------------------------------
-    // PHASE 2: Travelling UP toward top limit switch (rest)
+    // PHASE 3: Travel UP toward top limit switch
     // ----------------------------------------------------------
     case CLEAN_GOING_UP: {
       // --- Stall detection ---
@@ -483,12 +486,12 @@ void MotorDriver::tick() {
           topLimitTriggered = true;
           Serial.println("[WIPER] Top limit switch triggered");
 
-          // Stop, then apply brief DOWN relief pulse
           setCleaningMotor(0, 0);
-          delay(10);
-          setCleaningMotor(-1, 180); // DOWN at reduced power — relief only
-          wiperEnterState(CLEAN_RELIEF_AT_TOP);
-          Serial.println("[WIPER] Relief pulse DOWN started");
+          delay(30); // brief settle before reversing
+
+          setCleaningMotor(-1, 180); // DOWN at reduced speed toward rest
+          wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
+          Serial.println("[WIPER] Phase 4: Going DOWN to rest position");
         }
       } else {
         topDebounce       = 0;
@@ -498,18 +501,36 @@ void MotorDriver::tick() {
     }
 
     // ----------------------------------------------------------
-    // RELIEF PULSE after top switch — brief DOWN burst, then idle
+    // PHASE 4: Travel DOWN back to rest position at bottom
     // ----------------------------------------------------------
-    case CLEAN_RELIEF_AT_TOP: {
-      if (now - wiperReliefStartMs >= WIPER_RELIEF_PULSE_MS) {
+    case CLEAN_GOING_DOWN_TO_REST: {
+      // --- Stall detection ---
+      if (now - wiperPhaseStartMs > WIPER_STALL_TIMEOUT_MS) {
         setCleaningMotor(0, 0);
-        wiperEnterState(CLEAN_IDLE);
-        // Clear debounce flags so switches are fresh for next cycle
-        bottomLimitTriggered = false;
-        topLimitTriggered    = false;
+        wiperEnterState(CLEAN_STALLED);
+        Serial.println("[WIPER] *** STALL DETECTED going DOWN to rest — cycle aborted ***");
+        break;
+      }
+
+      // --- Bottom limit switch debounce ---
+      if (digitalRead(pinLimitBottom) == LOW) {
+        bottomDebounce++;
+        if (bottomDebounce >= 5 && !bottomLimitTriggered) {
+          bottomLimitTriggered = true;
+          setCleaningMotor(0, 0);
+
+          // Reset all debounce flags for the next cycle
+          bottomLimitTriggered = false;
+          topLimitTriggered    = false;
+          bottomDebounce       = 0;
+          topDebounce          = 0;
+
+          wiperEnterState(CLEAN_IDLE);
+          Serial.println("[WIPER] >>> CLEAN CYCLE COMPLETE. Wiper resting at bottom. <<<");
+        }
+      } else {
         bottomDebounce       = 0;
-        topDebounce          = 0;
-        Serial.println("[WIPER] >>> CLEAN CYCLE COMPLETE. Wiper resting at top. <<<");
+        bottomLimitTriggered = false;
       }
       break;
     }
@@ -518,9 +539,8 @@ void MotorDriver::tick() {
     // STALLED — motor is off, waiting for manual intervention
     // ----------------------------------------------------------
     case CLEAN_STALLED:
-      // Motor is already off. The app's Emergency Stop or a new
-      // cycle request (after clearing the obstruction) will reset this.
-      // stopAll() sets cleanCycleState = CLEAN_IDLE.
+      // Motor is already off. Emergency Stop or a new cycle request
+      // (after clearing the obstruction) will reset via stopAll().
       break;
   }
 }
