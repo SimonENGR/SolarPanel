@@ -8,7 +8,8 @@
 #define PWM_RES   8
 
 // --- Tilt Stepper Config ---
-#define STEP_DELAY   1000  // microseconds between step pulses (matches homing speed)
+#define STEP_DELAY   1000  // target speed delay (microseconds between step pulses)
+#define STEP_DELAY_MAX 4000  // start speed delay (slower, for ramping)
 #define ENCODER_CPR  3600  // encoder counts per revolution (before 4x quadrature)
 #define GEAR_RATIO   50    // 1:50 worm gear
 
@@ -110,6 +111,7 @@ private:
   int           limitDebounce;
   volatile bool isHomed;        // has been homed at least once
   volatile bool isHoming;       // currently in homing procedure
+  unsigned int  currentStepDelay; // speed control (acceleration profile)
 
   // --- Wiper state ---
   volatile bool            bottomLimitTriggered;

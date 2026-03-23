@@ -31,6 +31,7 @@ MotorDriver::MotorDriver(int cleanR, int cleanL,
   this->isPositioning   = false;
   this->isHomed         = false;
   this->isHoming        = false;
+  this->currentStepDelay = STEP_DELAY_MAX;
 
   // Wiper state
   this->bottomLimitTriggered = false;
@@ -75,8 +76,8 @@ void MotorDriver::begin() {
   pcnt_config_a.ctrl_gpio_num  = pinEncB;
   pcnt_config_a.unit           = ENCODER_PCNT_UNIT;
   pcnt_config_a.channel        = PCNT_CHANNEL_0;
-  pcnt_config_a.pos_mode       = PCNT_COUNT_DEC;
-  pcnt_config_a.neg_mode       = PCNT_COUNT_INC;
+  pcnt_config_a.pos_mode       = PCNT_COUNT_INC;
+  pcnt_config_a.neg_mode       = PCNT_COUNT_DEC;
   pcnt_config_a.lctrl_mode     = PCNT_MODE_REVERSE;
   pcnt_config_a.hctrl_mode     = PCNT_MODE_KEEP;
   pcnt_config_a.counter_h_lim  = 32767;
@@ -89,8 +90,8 @@ void MotorDriver::begin() {
   pcnt_config_b.ctrl_gpio_num  = pinEncA;
   pcnt_config_b.unit           = ENCODER_PCNT_UNIT;
   pcnt_config_b.channel        = PCNT_CHANNEL_1;
-  pcnt_config_b.pos_mode       = PCNT_COUNT_INC;
-  pcnt_config_b.neg_mode       = PCNT_COUNT_DEC;
+  pcnt_config_b.pos_mode       = PCNT_COUNT_DEC;
+  pcnt_config_b.neg_mode       = PCNT_COUNT_INC;
   pcnt_config_b.lctrl_mode     = PCNT_MODE_REVERSE;
   pcnt_config_b.hctrl_mode     = PCNT_MODE_KEEP;
   pcnt_config_b.counter_h_lim  = 32767;
@@ -401,9 +402,38 @@ void MotorDriver::tick() {
   // ----------------------------------------------------------------
   if (tiltState != 0) {
     digitalWrite(pinStep, HIGH);
-    delayMicroseconds(STEP_DELAY);
+    delayMicroseconds(currentStepDelay);
     digitalWrite(pinStep, LOW);
-    delayMicroseconds(STEP_DELAY);
+    delayMicroseconds(currentStepDelay);
+
+    // Dynamic speed profiling (Ramping)
+    if (isPositioning) {
+      long currentPos = getEncoderPosition();
+      long error      = targetPos - currentPos;
+
+      if (abs(error) < 800) {
+        // Decelerate when close to target
+        if (currentStepDelay < STEP_DELAY_MAX) {
+          currentStepDelay += 20;
+          if (currentStepDelay > STEP_DELAY_MAX) currentStepDelay = STEP_DELAY_MAX; // clamp
+        }
+      } else {
+        // Accelerate up to max speed
+        if (currentStepDelay > STEP_DELAY) {
+          currentStepDelay -= 10;
+          if (currentStepDelay < STEP_DELAY) currentStepDelay = STEP_DELAY; // clamp
+        }
+      }
+    } else {
+      // Manual mode (no target): Just accelerate
+      if (currentStepDelay > STEP_DELAY) {
+        currentStepDelay -= 10;
+        if (currentStepDelay < STEP_DELAY) currentStepDelay = STEP_DELAY;
+      }
+    }
+  } else {
+    // Re-arm delay curve when stopped
+    currentStepDelay = STEP_DELAY_MAX;
   }
 
   // ----------------------------------------------------------------
