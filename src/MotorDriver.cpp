@@ -76,8 +76,8 @@ void MotorDriver::begin() {
   pcnt_config_a.ctrl_gpio_num  = pinEncB;
   pcnt_config_a.unit           = ENCODER_PCNT_UNIT;
   pcnt_config_a.channel        = PCNT_CHANNEL_0;
-  pcnt_config_a.pos_mode       = PCNT_COUNT_INC;
-  pcnt_config_a.neg_mode       = PCNT_COUNT_DEC;
+  pcnt_config_a.pos_mode       = PCNT_COUNT_DEC;
+  pcnt_config_a.neg_mode       = PCNT_COUNT_INC;
   pcnt_config_a.lctrl_mode     = PCNT_MODE_REVERSE;
   pcnt_config_a.hctrl_mode     = PCNT_MODE_KEEP;
   pcnt_config_a.counter_h_lim  = 32767;
@@ -90,8 +90,8 @@ void MotorDriver::begin() {
   pcnt_config_b.ctrl_gpio_num  = pinEncA;
   pcnt_config_b.unit           = ENCODER_PCNT_UNIT;
   pcnt_config_b.channel        = PCNT_CHANNEL_1;
-  pcnt_config_b.pos_mode       = PCNT_COUNT_DEC;
-  pcnt_config_b.neg_mode       = PCNT_COUNT_INC;
+  pcnt_config_b.pos_mode       = PCNT_COUNT_INC;
+  pcnt_config_b.neg_mode       = PCNT_COUNT_DEC;
   pcnt_config_b.lctrl_mode     = PCNT_MODE_REVERSE;
   pcnt_config_b.hctrl_mode     = PCNT_MODE_KEEP;
   pcnt_config_b.counter_h_lim  = 32767;
@@ -121,25 +121,25 @@ void MotorDriver::begin() {
   pinMode(pinLimitTop,    INPUT_PULLUP);
   delay(10);
 
-  bool atTop    = (digitalRead(pinLimitTop)    == LOW);
-  bool atBottom = (digitalRead(pinLimitBottom) == LOW);
+  bool atTop    = (digitalRead(pinLimitTop)    == HIGH);
+  bool atBottom = (digitalRead(pinLimitBottom) == HIGH);
 
   Serial.println("[WIPER] Bottom limit switch on GPIO " + String(pinLimitBottom) +
                  (atBottom ? " (pressed)" : " (open)"));
   Serial.println("[WIPER] Top    limit switch on GPIO " + String(pinLimitTop) +
                  (atTop    ? " (pressed)" : " (open)"));
 
-  if (atBottom) {
+ if (atBottom) {
     Serial.println("[WIPER] Boot: wiper confirmed at rest (bottom). Ready.");
   } else if (atTop) {
-    Serial.println("[WIPER] Boot: wiper at top — driving DOWN to rest position.");
-    wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
-    setCleaningMotor(-1, 180); // DOWN at reduced speed to rest
+    Serial.println("[WIPER] Boot: wiper at top — waiting for app command.");
   } else {
-    Serial.println("[WIPER] Boot: wiper position unknown — driving DOWN to rest position.");
-    wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
-    setCleaningMotor(-1, 180); // DOWN — will stop when bottom switch fires
+    Serial.println("[WIPER] Boot: wiper position unknown — waiting for app command.");
   }
+  
+  // Force IDLE state on boot regardless of limit switch positions
+  cleanCycleState = CLEAN_IDLE; 
+  setCleaningMotor(0, 0);
 }
 
 // ======================================================================
@@ -336,13 +336,25 @@ void MotorDriver::initiateFullCleanCycle() {
     Serial.println("[WIPER] Clean cycle already in progress — ignoring.");
     return;
   }
-  if (digitalRead(pinLimitTop) != LOW) {
+  if (digitalRead(pinLimitTop) != HIGH) {
     Serial.println("[WIPER] WARNING: Top limit not active at cycle start. Proceeding anyway.");
   }
 
-  wiperEnterState(CLEAN_GOING_DOWN);
-  setCleaningMotor(-1, 255); // DOWN
-  Serial.println("[WIPER] >>> CLEAN CYCLE STARTED — Phase 1: Going DOWN <<<");
+  // --- NEW SAFETY CHECK ---
+  // Check if the wiper is already resting on the bottom limit switch
+  if (digitalRead(pinLimitBottom) == HIGH) {
+    Serial.println("[WIPER] >>> CLEAN CYCLE STARTED — Already at bottom limit! Skipping Phase 1. <<<");
+    
+    // Jump straight to the pumping phase. 
+    // The tick() function will wait for the pump duration, then automatically start going UP.
+    wiperEnterState(CLEAN_PUMPING);
+    
+  } else {
+    // Normal sequence: Wiper is somewhere in the middle or top, drive DOWN first
+    Serial.println("[WIPER] >>> CLEAN CYCLE STARTED — Phase 1: Going DOWN <<<");
+    wiperEnterState(CLEAN_GOING_DOWN);
+    setCleaningMotor(-1, 255); // DOWN
+  }
 }
 
 // ======================================================================
@@ -415,13 +427,13 @@ void MotorDriver::tick() {
         // Decelerate when close to target
         if (currentStepDelay < STEP_DELAY_MAX) {
           currentStepDelay += 20;
-          if (currentStepDelay > STEP_DELAY_MAX) currentStepDelay = STEP_DELAY_MAX; // clamp
+          if (currentStepDelay > STEP_DELAY_MAX) currentStepDelay = STEP_DELAY_MAX;
         }
       } else {
         // Accelerate up to max speed
         if (currentStepDelay > STEP_DELAY) {
           currentStepDelay -= 10;
-          if (currentStepDelay < STEP_DELAY) currentStepDelay = STEP_DELAY; // clamp
+          if (currentStepDelay < STEP_DELAY) currentStepDelay = STEP_DELAY;
         }
       }
     } else {
@@ -439,6 +451,7 @@ void MotorDriver::tick() {
   // ----------------------------------------------------------------
   // 4. Wiper state machine
   //    Sequence: GOING_DOWN → PUMPING → GOING_UP → GOING_DOWN_TO_REST → IDLE
+  //    NOTE: Switches read HIGH when triggered (NO wiring with gray wire)
   // ----------------------------------------------------------------
   unsigned long now = millis();
 
@@ -452,7 +465,6 @@ void MotorDriver::tick() {
     // PHASE 1: Travel DOWN toward bottom limit switch
     // ----------------------------------------------------------
     case CLEAN_GOING_DOWN: {
-      // --- Stall detection ---
       if (now - wiperPhaseStartMs > WIPER_STALL_TIMEOUT_MS) {
         setCleaningMotor(0, 0);
         wiperEnterState(CLEAN_STALLED);
@@ -460,14 +472,12 @@ void MotorDriver::tick() {
         break;
       }
 
-      // --- Bottom limit switch debounce ---
-      if (digitalRead(pinLimitBottom) == LOW) {
+      if (digitalRead(pinLimitBottom) == HIGH) {
         bottomDebounce++;
         if (bottomDebounce >= 5 && !bottomLimitTriggered) {
           bottomLimitTriggered = true;
           Serial.println("[WIPER] Bottom limit switch triggered");
-
-          setCleaningMotor(0, 0); // Stop wiper at bottom
+          setCleaningMotor(0, 0);
 
           // TODO: Activate cleaning pump here once GPIO is wired.
           //   Example: digitalWrite(PIN_PUMP, HIGH);
@@ -490,7 +500,7 @@ void MotorDriver::tick() {
         // TODO: Deactivate pump here once GPIO is wired.
         //   Example: digitalWrite(PIN_PUMP, LOW);
 
-        Serial.println("[WIPER] Pump OFF. Phase 3: Going UP <<<");
+        Serial.println("[WIPER] Pump OFF. Phase 3: Going UP");
         setCleaningMotor(1, 255); // UP full speed
         wiperEnterState(CLEAN_GOING_UP);
       }
@@ -501,7 +511,6 @@ void MotorDriver::tick() {
     // PHASE 3: Travel UP toward top limit switch
     // ----------------------------------------------------------
     case CLEAN_GOING_UP: {
-      // --- Stall detection ---
       if (now - wiperPhaseStartMs > WIPER_STALL_TIMEOUT_MS) {
         setCleaningMotor(0, 0);
         wiperEnterState(CLEAN_STALLED);
@@ -509,17 +518,14 @@ void MotorDriver::tick() {
         break;
       }
 
-      // --- Top limit switch debounce ---
-      if (digitalRead(pinLimitTop) == LOW) {
+      if (digitalRead(pinLimitTop) == HIGH) {
         topDebounce++;
         if (topDebounce >= 5 && !topLimitTriggered) {
           topLimitTriggered = true;
           Serial.println("[WIPER] Top limit switch triggered");
-
           setCleaningMotor(0, 0);
-          delay(30); // brief settle before reversing
-
-          setCleaningMotor(-1, 180); // DOWN at reduced speed toward rest
+          delay(30);
+          setCleaningMotor(-1, 255); // DOWN at reduced speed toward rest
           wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
           Serial.println("[WIPER] Phase 4: Going DOWN to rest position");
         }
@@ -534,7 +540,6 @@ void MotorDriver::tick() {
     // PHASE 4: Travel DOWN back to rest position at bottom
     // ----------------------------------------------------------
     case CLEAN_GOING_DOWN_TO_REST: {
-      // --- Stall detection ---
       if (now - wiperPhaseStartMs > WIPER_STALL_TIMEOUT_MS) {
         setCleaningMotor(0, 0);
         wiperEnterState(CLEAN_STALLED);
@@ -542,8 +547,7 @@ void MotorDriver::tick() {
         break;
       }
 
-      // --- Bottom limit switch debounce ---
-      if (digitalRead(pinLimitBottom) == LOW) {
+      if (digitalRead(pinLimitBottom) == HIGH) {
         bottomDebounce++;
         if (bottomDebounce >= 5 && !bottomLimitTriggered) {
           bottomLimitTriggered = true;

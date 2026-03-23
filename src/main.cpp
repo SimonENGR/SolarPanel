@@ -58,8 +58,8 @@ const char* OWM_API_KEY = "a00650a3a9459e3365cebef437c717e9";
 // IBT-2 drive pins reuse PIN_CLEAN_R / PIN_CLEAN_L above (no change)
 // Limit switches only — no encoder needed
 // TODO: assign real GPIO numbers once wired
-#define PIN_WIPER_LIMIT_BOTTOM  27   // Bottom limit switch (end of stroke)
-#define PIN_WIPER_LIMIT_TOP     35   // Top    limit switch (rest position)
+#define PIN_WIPER_LIMIT_BOTTOM  16   // Bottom limit switch — gray wire signal
+#define PIN_WIPER_LIMIT_TOP      4   // Top    limit switch — gray wire signal
 
 // ======================================================================
 // MODULE INSTANTIATION
@@ -225,7 +225,7 @@ void motorTaskCode(void *parameter) {
     } else {
       // Auto / Semi-Auto Mode Logic
       unsigned long now = millis();
-
+/*
       // Sensor-triggered cleaning (both Auto and Semi-Auto)
       if ((sensorSystem.isCurrentBelowThreshold() ||
            sensorSystem.areIRSensorsReflected()) &&
@@ -234,7 +234,7 @@ void motorTaskCode(void *parameter) {
         motorSystem.initiateFullCleanCycle();
         lastCleaningTime = millis();
       }
-
+*/
       // Auto-Tracking + Weather Logic
       if (sunPosition != nullptr) {
         static unsigned long lastMoveTime = 0;

@@ -21,14 +21,13 @@
 #define WIPER_STALL_TIMEOUT_MS   8000UL
 
 // Duration (ms) the cleaning pump runs after the wiper reaches the bottom.
-// Adjust this to how long the pump needs to prime and spray.
 // TODO: Tune this value once the pump is wired and tested.
 #define WIPER_PUMP_DURATION_MS   3000UL
 
 // --- Wiper Clean Cycle State Machine ---
 // Wiper rests at BOTTOM (bottom limit switch pressed).
-// Cycle: DOWN until bottom switch → PUMP activates → UP until top switch →
-//        DOWN until bottom switch (rest) → IDLE.
+// Switches read HIGH when triggered (NO wiring with gray wire).
+// Cycle: DOWN → bottom switch → PUMP → UP → top switch → DOWN to rest → IDLE
 enum CleanCycleState {
   CLEAN_IDLE,
   CLEAN_GOING_DOWN,          // Phase 1: driving down toward bottom limit switch
