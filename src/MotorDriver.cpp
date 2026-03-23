@@ -353,7 +353,7 @@ void MotorDriver::initiateFullCleanCycle() {
     // Normal sequence: Wiper is somewhere in the middle or top, drive DOWN first
     Serial.println("[WIPER] >>> CLEAN CYCLE STARTED — Phase 1: Going DOWN <<<");
     wiperEnterState(CLEAN_GOING_DOWN);
-    setCleaningMotor(-1, 255); // DOWN
+    setCleaningMotor(-1, 155); // DOWN
   }
 }
 
@@ -525,9 +525,9 @@ void MotorDriver::tick() {
           Serial.println("[WIPER] Top limit switch triggered");
           setCleaningMotor(0, 0);
           delay(30);
-          setCleaningMotor(-1, 255); // DOWN at reduced speed toward rest
+          setCleaningMotor(-1, 55); // DOWN at reduced speed (55) for the first 3 seconds
           wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
-          Serial.println("[WIPER] Phase 4: Going DOWN to rest position");
+          Serial.println("[WIPER] Phase 4: Going DOWN to rest position (slowly for 3s)");
         }
       } else {
         topDebounce       = 0;
@@ -545,6 +545,13 @@ void MotorDriver::tick() {
         wiperEnterState(CLEAN_STALLED);
         Serial.println("[WIPER] *** STALL DETECTED going DOWN to rest — cycle aborted ***");
         break;
+      }
+
+      // Speed control: 55 for first 3 seconds, then 155
+      if (now - wiperPhaseStartMs <= 3000) {
+        setCleaningMotor(-1, 55);
+      } else {
+        setCleaningMotor(-1, 155);
       }
 
       if (digitalRead(pinLimitBottom) == HIGH) {
