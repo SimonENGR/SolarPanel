@@ -8,12 +8,14 @@
 // ======================================================================
 // CONSTRUCTOR
 // ======================================================================
-MotorDriver::MotorDriver(int cleanR, int cleanL,
+MotorDriver::MotorDriver(int cleanR, int cleanL, int cleanEnR, int cleanEnL,
                          int enaPin, int stepPin, int dirPin,
                          int encA, int encB, int limitPin,
                          int limitBottomPin, int limitTopPin) {
   this->cleanRPin      = cleanR;
   this->cleanLPin      = cleanL;
+  this->cleanEnRPin    = cleanEnR;
+  this->cleanEnLPin    = cleanEnL;
   this->pinEna         = enaPin;
   this->pinStep        = stepPin;
   this->pinDir         = dirPin;
@@ -56,6 +58,11 @@ void MotorDriver::begin() {
   ledcAttachPin(cleanLPin, PWM_CH_L);
   ledcWrite(PWM_CH_R, 0);
   ledcWrite(PWM_CH_L, 0);
+
+  pinMode(cleanEnRPin, OUTPUT);
+  pinMode(cleanEnLPin, OUTPUT);
+  digitalWrite(cleanEnRPin, LOW);
+  digitalWrite(cleanEnLPin, LOW);
 
   // ----------------------------------------------------------------
   // 2. Tilt Stepper + Encoder — unchanged
@@ -243,12 +250,18 @@ void MotorDriver::setCleaningMotor(int direction, int speed) {
   // direction -1 → LPWM (cleanLPin) → wiper DOWN toward bottom limit
   // direction  0 → stop
   if (direction == 1) {
+    digitalWrite(cleanEnRPin, HIGH);
+    digitalWrite(cleanEnLPin, HIGH);
     ledcWrite(PWM_CH_L, 0);
     ledcWrite(PWM_CH_R, speed);
   } else if (direction == -1) {
+    digitalWrite(cleanEnRPin, HIGH);
+    digitalWrite(cleanEnLPin, HIGH);
     ledcWrite(PWM_CH_R, 0);
     ledcWrite(PWM_CH_L, speed);
   } else {
+    digitalWrite(cleanEnRPin, LOW);
+    digitalWrite(cleanEnLPin, LOW);
     ledcWrite(PWM_CH_R, 0);
     ledcWrite(PWM_CH_L, 0);
   }
@@ -287,8 +300,8 @@ void MotorDriver::stopAll() {
 }
 
 void MotorDriver::moveToAngle(float degrees) {
-  // SAFETY: Clamp to 0 minimum
-  if (degrees < 0.0f) degrees = 0.0f;
+  // SAFETY: Clamp to -1.5 minimum (Limit switch is at -1.4)
+  if (degrees < -1.5f) degrees = -1.5f;
 
   targetPos     = (long)(degrees * (ENCODER_CPR * 4) * GEAR_RATIO / 360.0f);
   isPositioning = true;
@@ -587,9 +600,10 @@ void MotorDriver::tick() {
 }
 
 // ======================================================================
-// TILT ENCODER — completely unchanged
+// TILT ENCODER
 // ======================================================================
-double       cheated_pcnt_accum = 0.0;
+// 1 degree = 2000 counts. Limit switch home position is -1.4 degrees.
+double       cheated_pcnt_accum = -2800.0;
 int16_t      last_pcnt          = 0;
 portMUX_TYPE encoder_mux        = portMUX_INITIALIZER_UNLOCKED;
 
@@ -605,17 +619,13 @@ long MotorDriver::getEncoderPosition() {
   double true_diff = (double)(diff);
   
   // Asymmetric calibration: going UP vs going DOWN
-  // Raw 90° UP   reads as ~61° raw counts -> 90 / 61 = 1.475 multiplier
-  // Raw 90° DOWN reads as ~90° raw counts -> 90 / 90 = 1.0 multiplier
   if (true_diff > 0) {
-    cheated_pcnt_accum += true_diff * 1.475; // Upward scaling works (0 -> 90)
+    // Final tweak: moving to 1.094 balances the very top of the arc to hit 90 dead-on.
+    cheated_pcnt_accum += true_diff * 1.084;
   } else {
-    // Previous downward scaling of 0.742 resulted in (0, 90, 30).
-    // This means 90° of physical downward travel only registered as 60° of encoder travel (90 - 30 = 60).
-    // Therefore, the raw downward ticks represent 60°. We need them to represent 90°.
-    // New multiplier ratio: 90 / 60 = 1.5. 
-    // Old multiplier was 0.742 * 1.5 = 1.113. Let's use 1.12 to be safe and ensure it reaches 0.
-    cheated_pcnt_accum += true_diff * 1.115;
+    // Adjusted DOWN multiplier to perfectly balance the 85° return path (from 89.62 targetting 5.0 flat)
+    // New multiplier: 1.362 * (84.62 target / 86.20 actual) = 1.337
+    cheated_pcnt_accum += true_diff * 1.345;
   }
   last_pcnt           = count;
   long current_pos    = (long)cheated_pcnt_accum;
@@ -628,11 +638,11 @@ void MotorDriver::resetEncoder() {
   portENTER_CRITICAL_ISR(&encoder_mux);
   pcnt_counter_pause(ENCODER_PCNT_UNIT);
   pcnt_counter_clear(ENCODER_PCNT_UNIT);
-  cheated_pcnt_accum = 0.0;
+  cheated_pcnt_accum = -2800.0; // 1 degree = 2000 counts. -1.4 degrees = -2800 counts
   last_pcnt          = 0;
   pcnt_counter_resume(ENCODER_PCNT_UNIT);
   portEXIT_CRITICAL_ISR(&encoder_mux);
-  Serial.println("[ENCODER] Tilt encoder reset to 0°");
+  Serial.println("[ENCODER] Tilt encoder reset to -1.4°");
 }
 
 float MotorDriver::getAngleDegrees() {

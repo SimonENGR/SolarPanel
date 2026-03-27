@@ -17,8 +17,7 @@
 // --- Wiper Safety Config ---
 // Maximum time (ms) allowed for a single stroke before declaring a stall.
 // Measure your actual full-stroke time and set this to ~2x that value.
-// Example: if bottom→top takes ~4 s, set 8000 ms.
-#define WIPER_STALL_TIMEOUT_MS   8000UL
+#define WIPER_STALL_TIMEOUT_MS   20000UL
 
 // Duration (ms) the cleaning pump runs after the wiper reaches the bottom.
 // TODO: Tune this value once the pump is wired and tested.
@@ -47,7 +46,7 @@ public:
   // limitTopPin    = top    limit switch, LOW when triggered (rest position)
   // No wiper encoder pins — position is determined solely by limit switches
   // ----------------------------------------------------------------
-  MotorDriver(int cleanR, int cleanL,
+  MotorDriver(int cleanR, int cleanL, int cleanEnR, int cleanEnL,
               int enaPin, int stepPin, int dirPin,
               int encA, int encB, int limitPin,
               int limitBottomPin, int limitTopPin);
@@ -97,6 +96,7 @@ private:
 
   // --- Cleaning motor pins ---
   int cleanRPin, cleanLPin;
+  int cleanEnRPin, cleanEnLPin;
 
   // --- Wiper limit switch pins (read-only inputs) ---
   int pinLimitBottom;   // bottom of stroke

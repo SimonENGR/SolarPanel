@@ -41,10 +41,45 @@ SolarPosition *sunPosition = nullptr;
 const char* OWM_API_KEY = "a00650a3a9459e3365cebef437c717e9";
 
 // ======================================================================
+// FULL SYSTEM PINOUT & WIRING GUIDE
+// ======================================================================
+/*
+  Power & Ground:
+  VIN / 5V  -> Main 5V Power Supply Input (from 120V-5V converter)
+  GND       -> Common Ground (Tied to buck converter, motor drivers, sensors)
+  3V3       -> 3.3V Output (for logic-level sensors if needed)
+
+  Cleaning System (IBT-2 Motor Driver):
+  GPIO 32   -> IBT-2 RPWM (Right/Up)
+  GPIO 33   -> IBT-2 LPWM (Left/Down)
+  GPIO 25   -> IBT-2 R_EN (Right Enable)
+  GPIO 26   -> IBT-2 L_EN (Left Enable)
+
+  Tilt System (Stepper Motor Driver):
+  GPIO 21   -> Stepper ENA- / ENA+ (Enable, LOW = active)
+  GPIO 22   -> Stepper PUL- / PUL+ (Pulse/Step)
+  GPIO 23   -> Stepper DIR- / DIR+ (Direction)
+  GPIO 18   -> Tilt Encoder Phase A (Grey Wire)
+  GPIO 19   -> Tilt Encoder Phase B (Green/Other Wire)
+  GPIO 15   -> Tilt Limit Switch (Home / 0°)
+
+  Cleaning Wiper Limit Switches:
+  GPIO 16   -> Bottom Limit Switch (Rest position)
+  GPIO  4   -> Top Limit Switch (End of stroke)
+
+  Sensors (Placeholders):
+  GPIO 34   -> Solar Current Sensor (Input Only)
+  GPIO 13   -> IR Sensor 1
+  GPIO 14   -> IR Sensor 2
+*/
+
+// ======================================================================
 // PIN DEFINITIONS
 // ======================================================================
 #define PIN_CLEAN_R    32   // Cleaning motor IBT-2 Right
 #define PIN_CLEAN_L    33   // Cleaning motor IBT-2 Left
+#define PIN_CLEAN_EN_R 25   // Cleaning motor IBT-2 Enable Right
+#define PIN_CLEAN_EN_L 26   // Cleaning motor IBT-2 Enable Left
 #define PIN_TILT_ENA   21   // Stepper enable (LOW = enabled)
 #define PIN_TILT_STEP  22   // Stepper pulse (PUL+)
 #define PIN_TILT_DIR   23   // Stepper direction (DIR+)
@@ -64,7 +99,7 @@ const char* OWM_API_KEY = "a00650a3a9459e3365cebef437c717e9";
 // ======================================================================
 // MODULE INSTANTIATION
 // ======================================================================
-MotorDriver motorSystem(PIN_CLEAN_R, PIN_CLEAN_L, PIN_TILT_ENA, PIN_TILT_STEP,
+MotorDriver motorSystem(PIN_CLEAN_R, PIN_CLEAN_L, PIN_CLEAN_EN_R, PIN_CLEAN_EN_L, PIN_TILT_ENA, PIN_TILT_STEP,
                         PIN_TILT_DIR, PIN_ENC_A, PIN_ENC_B, PIN_LIMIT,
                         PIN_WIPER_LIMIT_BOTTOM, PIN_WIPER_LIMIT_TOP);
 
@@ -265,8 +300,8 @@ void motorTaskCode(void *parameter) {
             if (targetAngle > 85.0f)
               targetAngle = 85.0f; // Soft cap near horizontal
           } else {
-            // Nighttime: return to vertical bounds (0 degrees)
-            targetAngle = 0.0f;
+            // Nighttime: return to vertical limit switch for a nightly reset
+            targetAngle = -1.5f;
           }
 
           // Fetch current tilt to apply deadband
