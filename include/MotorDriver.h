@@ -32,6 +32,7 @@ enum CleanCycleState {
   CLEAN_GOING_DOWN,          // Phase 1: driving down toward bottom limit switch
   CLEAN_PUMPING,             // Phase 2: wiper stopped at bottom, pump running
   CLEAN_GOING_UP,            // Phase 3: driving up toward top limit switch
+  CLEAN_WAIT_AT_TOP,         // Phase 3.5: 3 second pause at top limit switch
   CLEAN_GOING_DOWN_TO_REST,  // Phase 4: driving back down to rest at bottom
   CLEAN_STALLED              // Stall detected — awaiting manual intervention
 };

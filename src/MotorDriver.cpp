@@ -537,14 +537,24 @@ void MotorDriver::tick() {
           topLimitTriggered = true;
           Serial.println("[WIPER] Top limit switch triggered");
           setCleaningMotor(0, 0);
-          delay(30);
-          setCleaningMotor(-1, 55); // DOWN at reduced speed (55) for the first 3 seconds
-          wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
-          Serial.println("[WIPER] Phase 4: Going DOWN to rest position (slowly for 3s)");
+          wiperEnterState(CLEAN_WAIT_AT_TOP);
+          Serial.println("[WIPER] Phase 3.5: Pausing at top for 3 seconds");
         }
       } else {
         topDebounce       = 0;
         topLimitTriggered = false;
+      }
+      break;
+    }
+
+    // ----------------------------------------------------------
+    // PHASE 3.5: Pause at top for 3 seconds
+    // ----------------------------------------------------------
+    case CLEAN_WAIT_AT_TOP: {
+      if (now - wiperPhaseStartMs >= 3000) {
+        Serial.println("[WIPER] Pause complete. Phase 4: Going DOWN to rest position (slowly for 3s)");
+        setCleaningMotor(-1, 55); // DOWN at reduced speed (55) for the first 3 seconds
+        wiperEnterState(CLEAN_GOING_DOWN_TO_REST);
       }
       break;
     }
