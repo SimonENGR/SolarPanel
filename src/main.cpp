@@ -155,7 +155,10 @@ void solarTaskCode(void *parameter) {
  * @param cloudPct   Cloud coverage percentage (0-100) from clouds.all
  * @return -1 if no override needed, else the target angle.
  */
-int mapWeatherToAngle(const String &condition, int cloudPct) {
+int mapWeatherToAngle(const String &condition, int cloudPct, float windSpeedKmh) {
+  if (windSpeedKmh > 30.0f) {
+    return 90; // Wind override takes precedence over everything
+  }
   if (condition == "Clouds") {
     // Only override for heavy overcast (>80%), not spotty clouds
     if (cloudPct > 80) return 90;
@@ -192,7 +195,9 @@ void pollWeather() {
     if (!err) {
       String condition = doc["weather"][0]["main"].as<String>();
       int cloudPct = doc["clouds"]["all"] | 0; // Cloud coverage 0-100%
-      int newOverride = mapWeatherToAngle(condition, cloudPct);
+      float windSpeedMs = doc["wind"]["speed"] | 0.0f; // Wind in m/s
+      float windSpeedKmh = windSpeedMs * 3.6f;
+      int newOverride = mapWeatherToAngle(condition, cloudPct, windSpeedKmh);
 
       Serial.printf("[WEATHER] Condition: %s, Clouds: %d%% → Override: %d°\n",
                     condition.c_str(), cloudPct, newOverride);

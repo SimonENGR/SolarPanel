@@ -278,6 +278,7 @@ void SolarWebServer::setupRoutes() {
       if (cond == "overcast")  angle = 90;
       else if (cond == "rain") angle = 60;
       else if (cond == "snow") angle = 15;
+      else if (cond == "wind") angle = 90;
       else if (cond == "clear") angle = -1;
 
       weatherOverrideAngle = angle;
